@@ -3,3 +3,6 @@ managed_components/
 dependencies.lock
 sdkconfig
 sdkconfig.old
+
+# Real WiFi/OpenSky/home-location values; copy secrets_config.example.hpp.
+main/secrets_config.hpp
