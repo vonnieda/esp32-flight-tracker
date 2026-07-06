@@ -15,3 +15,8 @@ CONFIG_FREERTOS_HZ=1000
 
 # WiFi/TLS/HTTP/JSON push the app past the default 1MB app partition.
 CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# LVGL's own built-in sprintf doesn't format floats correctly; use the C
+# library's instead (see main/radar_view.cpp's range label for why this
+# matters).
+CONFIG_LV_USE_CLIB_SPRINTF=y

@@ -9,7 +9,21 @@ Status
 ---
 - [x] Phase 1: LVGL display + touch bring-up (ST7796 over i80, FT6336 touch)
 - [x] Phase 2: Radar display layout/rendering
-- [x] Phase 3: OpenSky data integration (WiFi credentials hardcoded)
+- [x] Phase 3: OpenSky data integration (WiFi credentials hardcoded) — **confirmed working on hardware**, live aircraft plotting on the radar
+- [ ] Phase 4: UI polish
+
+Architecture
+---
+- `board_config.hpp` — all pin/bus constants for the WT32-SC01 Plus (display, touch, orientation).
+- `display.hpp/.cpp`, `touch.hpp/.cpp` — panel and touch bring-up, registered with `esp_lvgl_port`.
+- `contact.hpp` — the `Contact` struct (callsign/bearing_deg/distance_km/altitude_ft/track_deg) that's the common currency between data source and rendering.
+- `radar_view.hpp/.cpp` — the `RadarView` widget: rings, compass labels, center dot, pooled/reused blip widgets. Takes `std::span<const Contact>` in `update()`; doesn't know or care where contacts come from.
+- `geo.hpp/.cpp` — haversine bearing/distance between two lat/lon points.
+- `wifi_station.hpp/.cpp` — hardcoded-credential STA connect with auto-reconnect.
+- `opensky_client.hpp/.cpp` — OAuth2 client-credentials auth + `/states/all` polling, converts raw state vectors into `Contact`s via `geo.hpp`.
+- `ui.hpp/.cpp` — screen assembly (currently just the full-screen radar; this is where phase 4 UI additions will mostly live).
+- `main.cpp` — wires it all together: inits display/touch, builds the UI, connects WiFi, spawns the 30s OpenSky poll task.
+- `secrets_config.hpp` (gitignored) / `secrets_config.example.hpp` (committed template) — WiFi creds, OpenSky OAuth2 client_id/secret, home lat/lon.
 
 Building
 ---
@@ -67,6 +81,16 @@ This ESP-IDF checkout is a bleeding-edge `v6.1-dev` build, and its built-in
 (likely mid-refactor upstream). Worked around by using the managed
 `espressif/cjson` component instead — worth revisiting once this moves to a
 stable IDF release.
+
+**LVGL float formatting**: LVGL's Kconfig defaults to its own minimal
+built-in `sprintf` (`CONFIG_LV_USE_BUILTIN_SPRINTF`) rather than the C
+library's, and that built-in one doesn't format `%f` correctly — it silently
+produced "f fm" instead of "25 km" for the radar's range label. Fixed by
+switching to `CONFIG_LV_USE_CLIB_SPRINTF=y` (set in `sdkconfig.defaults`),
+which routes LVGL's `lv_label_set_text_fmt` etc. through the real libc
+`vsnprintf` and formats floats correctly. `%f` is fine to use normally
+elsewhere in the codebase (`std::snprintf`, `ESP_LOGx`) — this was
+LVGL-specific, not a toolchain-wide issue.
 
 Board
 ---
