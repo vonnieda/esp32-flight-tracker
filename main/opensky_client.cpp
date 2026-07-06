@@ -170,6 +170,7 @@ esp_err_t OpenSkyClient::fetch_contacts(float home_lat_deg, float home_lon_deg, 
     const cJSON *latitude_item = cJSON_GetArrayItem(state, 6);
     const cJSON *baro_altitude_item = cJSON_GetArrayItem(state, 7);
     const cJSON *on_ground_item = cJSON_GetArrayItem(state, 8);
+    const cJSON *velocity_item = cJSON_GetArrayItem(state, 9);
     const cJSON *true_track_item = cJSON_GetArrayItem(state, 10);
 
     if (!cJSON_IsNumber(longitude_item) || !cJSON_IsNumber(latitude_item)) {
@@ -192,6 +193,8 @@ esp_err_t OpenSkyClient::fetch_contacts(float home_lat_deg, float home_lon_deg, 
                              : 0.0f;
     contact.track_deg =
         cJSON_IsNumber(true_track_item) ? static_cast<float>(true_track_item->valuedouble) : 0.0f;
+    contact.ground_speed_mps =
+        cJSON_IsNumber(velocity_item) ? static_cast<float>(velocity_item->valuedouble) : 0.0f;
 
     out_contacts.push_back(std::move(contact));
   }

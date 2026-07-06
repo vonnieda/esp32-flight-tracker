@@ -10,18 +10,19 @@ Status
 - [x] Phase 1: LVGL display + touch bring-up (ST7796 over i80, FT6336 touch)
 - [x] Phase 2: Radar display layout/rendering
 - [x] Phase 3: OpenSky data integration (WiFi credentials hardcoded) — **confirmed working on hardware**, live aircraft plotting on the radar
-- [ ] Phase 4: UI polish
+- [x] Phase 4: UI polish — black/green CRT-style scope, rotating sweep line, heading-oriented plane icons with speed/heading dead reckoning, side list of callsigns/distance/altitude
 
 Architecture
 ---
 - `board_config.hpp` — all pin/bus constants for the WT32-SC01 Plus (display, touch, orientation).
 - `display.hpp/.cpp`, `touch.hpp/.cpp` — panel and touch bring-up, registered with `esp_lvgl_port`.
-- `contact.hpp` — the `Contact` struct (callsign/bearing_deg/distance_km/altitude_ft/track_deg) that's the common currency between data source and rendering.
-- `radar_view.hpp/.cpp` — the `RadarView` widget: rings, compass labels, center dot, pooled/reused blip widgets. Takes `std::span<const Contact>` in `update()`; doesn't know or care where contacts come from.
+- `contact.hpp` — the `Contact` struct (callsign/bearing_deg/distance_km/altitude_ft/track_deg/ground_speed_mps) that's the common currency between data source and rendering.
+- `radar_view.hpp/.cpp` — the `RadarView` widget: rings, compass labels, center dot, a rotating sweep line, and pooled/reused heading-oriented plane-icon blips with flight-number labels. Blip positions are dead-reckoned from speed/heading at 10Hz between OpenSky refreshes (re-baselined to the authoritative fix on each `update()`), so aircraft appear to move continuously rather than jumping every 30s. Takes `std::span<const Contact>` in `update()`; doesn't know or care where contacts come from.
+- `plane_table_view.hpp/.cpp` — the `PlaneTableView` widget: a small side list of every contact's flight number, live distance from the receiver, and altitude, sorted nearest-first, complementing the radar's position/heading view. Distance is dead-reckoned from speed/heading at the same 10Hz tick as `RadarView`'s blips, and the list is re-sorted on every tick (not just each OpenSky refresh) since aircraft can change relative order as they move. Same `std::span<const Contact>` `update()` contract as `RadarView`.
 - `geo.hpp/.cpp` — haversine bearing/distance between two lat/lon points.
 - `wifi_station.hpp/.cpp` — hardcoded-credential STA connect with auto-reconnect.
 - `opensky_client.hpp/.cpp` — OAuth2 client-credentials auth + `/states/all` polling, converts raw state vectors into `Contact`s via `geo.hpp`.
-- `ui.hpp/.cpp` — screen assembly (currently just the full-screen radar; this is where phase 4 UI additions will mostly live).
+- `ui.hpp/.cpp` — screen assembly: radar scope on the left, `PlaneTableView` filling the remaining width on the right.
 - `main.cpp` — wires it all together: inits display/touch, builds the UI, connects WiFi, spawns the 30s OpenSky poll task.
 - `secrets_config.hpp` (gitignored) / `secrets_config.example.hpp` (committed template) — WiFi creds, OpenSky OAuth2 client_id/secret, home lat/lon.
 

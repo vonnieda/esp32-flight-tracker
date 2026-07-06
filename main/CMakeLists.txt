@@ -5,6 +5,7 @@ idf_component_register(
         "touch.cpp"
         "ui.cpp"
         "radar_view.cpp"
+        "plane_table_view.cpp"
         "geo.cpp"
         "wifi_station.cpp"
         "opensky_client.cpp"

@@ -8,6 +8,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "opensky_client.hpp"
+#include "plane_table_view.hpp"
 #include "radar_view.hpp"
 #include "secrets_config.hpp"
 #include "touch.hpp"
@@ -22,6 +23,7 @@ constexpr uint32_t kPollIntervalMs = 30000;
 Display display;
 Touch touch;
 RadarView radar;
+PlaneTableView plane_table;
 WifiStation wifi;
 OpenSkyClient opensky;
 
@@ -41,6 +43,7 @@ void opensky_poll_task(void *arg) {
       ESP_LOGI(kTag, "radar updated with %zu contacts", contacts.size());
       if (lvgl_port_lock(0)) {
         radar.update(contacts);
+        plane_table.update(contacts);
         lvgl_port_unlock();
       }
     } else {
@@ -60,7 +63,7 @@ extern "C" void app_main() {
   ESP_ERROR_CHECK(touch.init(display.lvgl_display()));
 
   if (lvgl_port_lock(0)) {
-    ui::build_radar_screen(radar);
+    ui::build_radar_screen(radar, plane_table);
     radar.set_range_km(kRadarRangeKm);
     lvgl_port_unlock();
   } else {
