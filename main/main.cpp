@@ -2,6 +2,8 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
+#include "mock_contacts.hpp"
+#include "radar_view.hpp"
 #include "touch.hpp"
 #include "ui.hpp"
 
@@ -10,6 +12,7 @@ constexpr char kTag[] = "main";
 
 Display display;
 Touch touch;
+RadarView radar;
 }  // namespace
 
 extern "C" void app_main() {
@@ -20,7 +23,8 @@ extern "C" void app_main() {
   ESP_ERROR_CHECK(touch.init(display.lvgl_display()));
 
   if (lvgl_port_lock(0)) {
-    ui::build_home_screen();
+    ui::build_radar_screen(radar);
+    radar.update(mock_contacts());
     lvgl_port_unlock();
   } else {
     ESP_LOGE(kTag, "Failed to lock LVGL for UI setup");

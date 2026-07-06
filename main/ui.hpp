@@ -1,9 +1,10 @@
 #pragma once
 
+#include "radar_view.hpp"
+
 namespace ui {
 
-// Phase 1 placeholder screen: proves the display renders and touch input
-// reaches LVGL. Replaced by the radar view in phase 2.
-void build_home_screen();
+// Builds the radar screen, initializing radar as its full-screen scope widget.
+void build_radar_screen(RadarView &radar);
 
 }  // namespace ui
