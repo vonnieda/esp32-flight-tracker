@@ -8,6 +8,15 @@ CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_QUAD=y
 
+# IDF's defaults leave real perf on the table for a UI-heavy app: CPU clocked
+# at 160MHz instead of the S3's max 240MHz, and the app compiled at IDF's
+# default -Og (Debug) instead of -O2. LVGL's software renderer is CPU-bound,
+# so both matter a lot here. "Performance" keeps assertions enabled (unlike
+# IDF's "Release" preset), which is a reasonable tradeoff for a hobby project
+# still under active development.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
 # LVGL wants a decently sized main task stack; the UI + touch handling run on it.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 

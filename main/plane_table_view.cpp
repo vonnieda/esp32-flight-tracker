@@ -4,14 +4,27 @@
 #include <cmath>
 #include <numeric>
 
+#include "plane_color.hpp"
+
 namespace {
 constexpr lv_color_t kColorBackground = LV_COLOR_MAKE(0x00, 0x00, 0x00);
 constexpr lv_color_t kColorHeaderText = LV_COLOR_MAKE(0x00, 0x8f, 0x11);
 constexpr lv_color_t kColorHeaderRule = LV_COLOR_MAKE(0x00, 0x4d, 0x14);
-constexpr lv_color_t kColorRowText = LV_COLOR_MAKE(0x39, 0xff, 0x14);
-constexpr int kDistanceColWidth = 60;
-constexpr int kAltitudeColWidth = 48;
+constexpr int kSpeedColWidth = 36;
+constexpr int kDistanceColWidth = 38;
+constexpr int kAltitudeColWidth = 40;
 constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
+constexpr float kMpsToKnots = 1.943844f;
+
+// Above this, altitude is abbreviated to the nearest thousand feet with a
+// "k" suffix (e.g. "27k") rather than the full value, to keep the column
+// narrow.
+constexpr float kAltitudeAbbreviateThresholdFt = 10000.0f;
+
+// Caps the list to a screenful regardless of how many contacts the (wider)
+// query radius returns; nearest-first sort means anything beyond this is
+// the least relevant traffic anyway.
+constexpr size_t kMaxTableRows = 16;
 
 // Matches RadarView's motion tick so the two views drift in lockstep.
 constexpr uint32_t kMotionTickMs = 100;
@@ -46,18 +59,24 @@ void PlaneTableView::init(lv_obj_t *parent, int height) {
   lv_obj_set_style_pad_bottom(header, 4, 0);
 
   lv_obj_t *flight_header = lv_label_create(header);
-  lv_label_set_text(flight_header, "CALLSIGN");
+  lv_label_set_text(flight_header, "FLIGHT");
   lv_obj_set_style_text_color(flight_header, kColorHeaderText, 0);
   lv_obj_set_flex_grow(flight_header, 1);
 
+  lv_obj_t *speed_header = lv_label_create(header);
+  lv_label_set_text(speed_header, "SPD");
+  lv_obj_set_style_text_color(speed_header, kColorHeaderText, 0);
+  lv_obj_set_width(speed_header, kSpeedColWidth);
+  lv_obj_set_style_text_align(speed_header, LV_TEXT_ALIGN_RIGHT, 0);
+
   lv_obj_t *distance_header = lv_label_create(header);
-  lv_label_set_text(distance_header, "RANGE");
+  lv_label_set_text(distance_header, "DIST");
   lv_obj_set_style_text_color(distance_header, kColorHeaderText, 0);
   lv_obj_set_width(distance_header, kDistanceColWidth);
   lv_obj_set_style_text_align(distance_header, LV_TEXT_ALIGN_RIGHT, 0);
 
   lv_obj_t *alt_header = lv_label_create(header);
-  lv_label_set_text(alt_header, "ALT.");
+  lv_label_set_text(alt_header, "ALT");
   lv_obj_set_style_text_color(alt_header, kColorHeaderText, 0);
   lv_obj_set_width(alt_header, kAltitudeColWidth);
   lv_obj_set_style_text_align(alt_header, LV_TEXT_ALIGN_RIGHT, 0);
@@ -71,17 +90,18 @@ PlaneTableView::Row &PlaneTableView::ensure_row(size_t index) {
     row.container = make_row_container(list_area_);
 
     row.flight_label = lv_label_create(row.container);
-    lv_obj_set_style_text_color(row.flight_label, kColorRowText, 0);
     lv_label_set_long_mode(row.flight_label, LV_LABEL_LONG_CLIP);
     lv_obj_set_flex_grow(row.flight_label, 1);
 
+    row.speed_label = lv_label_create(row.container);
+    lv_obj_set_width(row.speed_label, kSpeedColWidth);
+    lv_obj_set_style_text_align(row.speed_label, LV_TEXT_ALIGN_RIGHT, 0);
+
     row.distance_label = lv_label_create(row.container);
-    lv_obj_set_style_text_color(row.distance_label, kColorRowText, 0);
     lv_obj_set_width(row.distance_label, kDistanceColWidth);
     lv_obj_set_style_text_align(row.distance_label, LV_TEXT_ALIGN_RIGHT, 0);
 
     row.altitude_label = lv_label_create(row.container);
-    lv_obj_set_style_text_color(row.altitude_label, kColorRowText, 0);
     lv_obj_set_width(row.altitude_label, kAltitudeColWidth);
     lv_obj_set_style_text_align(row.altitude_label, LV_TEXT_ALIGN_RIGHT, 0);
 
@@ -91,7 +111,8 @@ PlaneTableView::Row &PlaneTableView::ensure_row(size_t index) {
 }
 
 void PlaneTableView::render() {
-  ensure_row(aircraft_.size());
+  const size_t shown = std::min(aircraft_.size(), kMaxTableRows);
+  ensure_row(shown);
 
   // Re-derive nearest-first order every render (not just on update()) since
   // aircraft_ positions move between OpenSky refreshes.
@@ -104,18 +125,31 @@ void PlaneTableView::render() {
            ab.east_km * ab.east_km + ab.north_km * ab.north_km;
   });
 
-  for (size_t i = 0; i < order.size(); ++i) {
+  for (size_t i = 0; i < shown; ++i) {
     Row &row = rows_[i];
     const Aircraft &aircraft = aircraft_[order[i]];
     const float distance_km =
         std::sqrt(aircraft.east_km * aircraft.east_km + aircraft.north_km * aircraft.north_km);
+    const lv_color_t color = plane_color::for_callsign(aircraft.callsign);
+
+    const int speed_kts = static_cast<int>(std::lround(aircraft.speed_mps * kMpsToKnots));
 
     lv_label_set_text(row.flight_label, aircraft.callsign.c_str());
+    lv_label_set_text_fmt(row.speed_label, "%d", speed_kts);
     lv_label_set_text_fmt(row.distance_label, "%.1f", static_cast<double>(distance_km));
-    lv_label_set_text_fmt(row.altitude_label, "%5d", static_cast<int>(aircraft.altitude_ft));
+    if (aircraft.altitude_ft >= kAltitudeAbbreviateThresholdFt) {
+      lv_label_set_text_fmt(row.altitude_label, "%dk",
+                            static_cast<int>(std::lround(aircraft.altitude_ft / 1000.0f)));
+    } else {
+      lv_label_set_text_fmt(row.altitude_label, "%d", static_cast<int>(aircraft.altitude_ft));
+    }
+    lv_obj_set_style_text_color(row.flight_label, color, 0);
+    lv_obj_set_style_text_color(row.speed_label, color, 0);
+    lv_obj_set_style_text_color(row.distance_label, color, 0);
+    lv_obj_set_style_text_color(row.altitude_label, color, 0);
     lv_obj_clear_flag(row.container, LV_OBJ_FLAG_HIDDEN);
   }
-  for (size_t i = order.size(); i < rows_.size(); ++i) {
+  for (size_t i = shown; i < rows_.size(); ++i) {
     lv_obj_add_flag(rows_[i].container, LV_OBJ_FLAG_HIDDEN);
   }
 }

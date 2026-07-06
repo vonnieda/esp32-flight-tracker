@@ -17,7 +17,11 @@
 
 namespace {
 constexpr char kTag[] = "main";
-constexpr float kRadarRangeKm = 25.0f;
+constexpr float kRadarRangeKm = 15.0f;
+// OpenSky is queried out to twice the displayed radar range so contacts
+// just beyond the scope can still show up as edge dots (and in the table)
+// before they cross onto the screen.
+constexpr float kQueryRangeKm = kRadarRangeKm * 2.0f;
 constexpr uint32_t kPollIntervalMs = 30000;
 
 Display display;
@@ -37,7 +41,7 @@ void opensky_poll_task(void *arg) {
 
   while (true) {
     const esp_err_t err = opensky.fetch_contacts(secrets::kHomeLatitudeDeg,
-                                                 secrets::kHomeLongitudeDeg, kRadarRangeKm,
+                                                 secrets::kHomeLongitudeDeg, kQueryRangeKm,
                                                  contacts);
     if (err == ESP_OK) {
       ESP_LOGI(kTag, "radar updated with %zu contacts", contacts.size());

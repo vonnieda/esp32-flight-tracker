@@ -8,10 +8,13 @@
 #include "contact.hpp"
 #include "lvgl.h"
 
-// A small side list showing every contact currently on the radar, with its
-// flight number, live distance from the receiver, and altitude, sorted
-// nearest-first. Complements RadarView, which plots position/heading but
-// has no room for this much text.
+// A small side list showing the nearest contacts currently tracked (capped
+// to a screenful), with its flight number, ground speed, live distance from
+// the receiver, and altitude, sorted nearest-first. Includes contacts beyond
+// RadarView's display range, since the underlying query radius is wider than
+// what the scope draws. Complements RadarView, which plots position/heading
+// but has no room for this much text. Each row's text is colored to match
+// its aircraft's blip on the radar (see plane_color.hpp).
 class PlaneTableView {
  public:
   // Builds the list as a child of parent, growing to fill remaining flex
@@ -42,6 +45,7 @@ class PlaneTableView {
   struct Row {
     lv_obj_t *container = nullptr;
     lv_obj_t *flight_label = nullptr;
+    lv_obj_t *speed_label = nullptr;
     lv_obj_t *distance_label = nullptr;
     lv_obj_t *altitude_label = nullptr;
   };

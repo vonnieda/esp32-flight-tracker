@@ -2,9 +2,16 @@
 
 #include <cmath>
 
+#include "plane_color.hpp"
+
 namespace {
+// The scope (rings/sweep/blips) fills the whole widget so the circle
+// dominates the available area; cardinal labels sit just inside the ring
+// rather than carving out a separate margin band for them.
 constexpr int kDiameterPx = 260;
 constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
+
+constexpr int kEdgeDotDiameterPx = 5;
 
 // Matches main.cpp's OpenSky poll interval so the sweep completes one lap
 // per data refresh.
@@ -18,18 +25,20 @@ constexpr uint32_t kMotionTickMs = 100;
 // Upper bound on simultaneous contacts. Held via reserve() so blips_ never
 // reallocates after a blip's lv_line has been pointed at its icon_points
 // array -- reallocation would move that array and leave the line drawing
-// from a dangling pointer.
-constexpr size_t kMaxBlips = 32;
+// from a dangling pointer. Sized generously since the query radius (see
+// main.cpp's kQueryRangeKm) covers roughly 4x the area actually drawn on
+// the scope.
+constexpr size_t kMaxBlips = 64;
 
 // Old-school phosphor-scope palette: black scope, everything else green.
 constexpr lv_color_t kColorBackground = LV_COLOR_MAKE(0x00, 0x00, 0x00);
 constexpr lv_color_t kColorOuterRing = LV_COLOR_MAKE(0x00, 0x8f, 0x11);
 constexpr lv_color_t kColorInnerRing = LV_COLOR_MAKE(0x00, 0x4d, 0x14);
-constexpr lv_color_t kColorCompassText = LV_COLOR_MAKE(0x00, 0xcc, 0x33);
+// Cardinal-direction labels are white so they stand out from the green scope.
+constexpr lv_color_t kColorCompassText = LV_COLOR_MAKE(0xff, 0xff, 0xff);
+constexpr lv_color_t kColorRangeText = LV_COLOR_MAKE(0x00, 0xcc, 0x33);
 constexpr lv_color_t kColorCenterDot = LV_COLOR_MAKE(0x66, 0xff, 0x66);
 constexpr lv_color_t kColorSweep = LV_COLOR_MAKE(0x33, 0xff, 0x33);
-constexpr lv_color_t kColorBlip = LV_COLOR_MAKE(0x39, 0xff, 0x14);
-constexpr lv_color_t kColorBlipLabel = LV_COLOR_MAKE(0x1f, 0x99, 0x0c);
 
 // A small dart/chevron pointing "up" (north) at zero heading, as offsets
 // from the aircraft's own center point.
@@ -115,11 +124,11 @@ void RadarView::init(lv_obj_t *parent) {
 
   add_compass_label("N", LV_ALIGN_TOP_MID, 0, 4);
   add_compass_label("E", LV_ALIGN_RIGHT_MID, -6, 0);
-  add_compass_label("S", LV_ALIGN_BOTTOM_MID, 0, -14);
+  add_compass_label("S", LV_ALIGN_BOTTOM_MID, 0, -4);
   add_compass_label("W", LV_ALIGN_LEFT_MID, 6, 0);
 
   range_label_ = lv_label_create(radar_area_);
-  lv_obj_set_style_text_color(range_label_, kColorCompassText, 0);
+  lv_obj_set_style_text_color(range_label_, kColorRangeText, 0);
   lv_obj_align(range_label_, LV_ALIGN_BOTTOM_RIGHT, -6, -4);
 
   set_range_km(range_km_);
@@ -158,12 +167,18 @@ void RadarView::ensure_blip_count(size_t count) {
     lv_line_set_points(blip.icon, blip.icon_points.data(), blip.icon_points.size());
     lv_obj_set_style_line_width(blip.icon, 2, 0);
     lv_obj_set_style_line_rounded(blip.icon, true, 0);
-    lv_obj_set_style_line_color(blip.icon, kColorBlip, 0);
     lv_obj_add_flag(blip.icon, LV_OBJ_FLAG_HIDDEN);
 
     blip.label = lv_label_create(radar_area_);
-    lv_obj_set_style_text_color(blip.label, kColorBlipLabel, 0);
     lv_obj_add_flag(blip.label, LV_OBJ_FLAG_HIDDEN);
+
+    blip.edge_dot = lv_obj_create(radar_area_);
+    lv_obj_remove_style_all(blip.edge_dot);
+    lv_obj_set_size(blip.edge_dot, kEdgeDotDiameterPx, kEdgeDotDiameterPx);
+    lv_obj_set_style_radius(blip.edge_dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(blip.edge_dot, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(blip.edge_dot, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(blip.edge_dot, LV_OBJ_FLAG_HIDDEN);
 
     blips_.push_back(blip);
   }
@@ -176,6 +191,11 @@ void RadarView::baseline_blip(Blip &blip, const Contact &contact) {
   blip.speed_mps = contact.ground_speed_mps;
   blip.heading_deg = contact.track_deg;
   blip.active = true;
+
+  const lv_color_t color = plane_color::for_callsign(contact.callsign);
+  lv_obj_set_style_line_color(blip.icon, color, 0);
+  lv_obj_set_style_text_color(blip.label, color, 0);
+  lv_obj_set_style_bg_color(blip.edge_dot, color, 0);
 
   lv_label_set_text(blip.label, contact.callsign.c_str());
 
@@ -202,8 +222,9 @@ void RadarView::baseline_blip(Blip &blip, const Contact &contact) {
 
 void RadarView::reposition_blip(Blip &blip) const {
   const float distance_km = std::sqrt(blip.east_km * blip.east_km + blip.north_km * blip.north_km);
-  const bool visible = distance_km <= range_km_;
-  if (visible) {
+  const bool in_range = distance_km <= range_km_;
+
+  if (in_range) {
     // Center-relative offsets for the label (lv_obj_align's LV_ALIGN_CENTER
     // convention), and the same point translated to radar_area_'s top-left
     // origin for the icon's absolute line coordinates.
@@ -216,9 +237,20 @@ void RadarView::reposition_blip(Blip &blip) const {
     }
     lv_obj_invalidate(blip.icon);
     lv_obj_align(blip.label, LV_ALIGN_CENTER, x_off, y_off + 14);
+  } else if (distance_km > 0.0f) {
+    // Out of display range but still within the (wider) query radius --
+    // clamp a dot right on the outer ring, along the contact's true
+    // bearing, instead of drawing the full heading icon.
+    const int32_t x_off =
+        static_cast<int32_t>(std::lround((blip.east_km / distance_km) * radius_px_));
+    const int32_t y_off =
+        static_cast<int32_t>(std::lround(-(blip.north_km / distance_km) * radius_px_));
+    lv_obj_align(blip.edge_dot, LV_ALIGN_CENTER, x_off, y_off);
   }
-  lv_obj_set_flag(blip.icon, LV_OBJ_FLAG_HIDDEN, !visible);
-  lv_obj_set_flag(blip.label, LV_OBJ_FLAG_HIDDEN, !visible);
+
+  lv_obj_set_flag(blip.icon, LV_OBJ_FLAG_HIDDEN, !in_range);
+  lv_obj_set_flag(blip.label, LV_OBJ_FLAG_HIDDEN, !in_range);
+  lv_obj_set_flag(blip.edge_dot, LV_OBJ_FLAG_HIDDEN, in_range);
 }
 
 void RadarView::tick_motion() {
@@ -250,6 +282,7 @@ void RadarView::update(std::span<const Contact> contacts) {
       blips_[i].active = false;
       lv_obj_add_flag(blips_[i].icon, LV_OBJ_FLAG_HIDDEN);
       lv_obj_add_flag(blips_[i].label, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(blips_[i].edge_dot, LV_OBJ_FLAG_HIDDEN);
     }
   }
 }

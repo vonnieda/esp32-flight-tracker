@@ -27,7 +27,8 @@ class RadarView {
   void set_range_km(float range_km);
 
   // Plots contacts, reusing blip widgets across calls. Contacts beyond the
-  // current range are hidden rather than clamped to the edge.
+  // current range are shown as a small dot clamped to the scope's edge
+  // (along their true bearing) rather than a full heading icon.
   void update(std::span<const Contact> contacts);
 
  private:
@@ -40,6 +41,9 @@ class RadarView {
     lv_obj_t *icon = nullptr;   // Full-scope-sized lv_line; points are absolute
                                 // pixel coords within radar_area_.
     lv_obj_t *label = nullptr;
+    lv_obj_t *edge_dot = nullptr;  // Shown instead of icon/label when the
+                                    // contact is farther than range_km_ (but
+                                    // still within the wider query radius).
     std::array<lv_point_precise_t, 5> icon_points{};
     // Plane-shape points rotated to heading_deg, relative to the aircraft's
     // own center. Only recomputed when a fresh contact arrives (~30s), not
