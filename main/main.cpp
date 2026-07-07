@@ -1,5 +1,6 @@
 #include <vector>
 
+#include "config_store.hpp"
 #include "contact.hpp"
 #include "display.hpp"
 #include "esp_err.h"
@@ -9,8 +10,8 @@
 #include "freertos/task.h"
 #include "opensky_client.hpp"
 #include "plane_table_view.hpp"
+#include "provisioning.hpp"
 #include "radar_view.hpp"
-#include "secrets_config.hpp"
 #include "touch.hpp"
 #include "ui.hpp"
 #include "wifi_station.hpp"
@@ -31,6 +32,9 @@ PlaneTableView plane_table;
 WifiStation wifi;
 OpenSkyClient opensky;
 
+float g_home_latitude_deg = 0.0f;
+float g_home_longitude_deg = 0.0f;
+
 void opensky_poll_task(void *arg) {
   (void)arg;
   std::vector<Contact> contacts;
@@ -40,9 +44,8 @@ void opensky_poll_task(void *arg) {
   vTaskDelay(pdMS_TO_TICKS(2000));
 
   while (true) {
-    const esp_err_t err = opensky.fetch_contacts(secrets::kHomeLatitudeDeg,
-                                                 secrets::kHomeLongitudeDeg, kQueryRangeKm,
-                                                 contacts);
+    const esp_err_t err = opensky.fetch_contacts(g_home_latitude_deg, g_home_longitude_deg,
+                                                 kQueryRangeKm, contacts);
     if (err == ESP_OK) {
       ESP_LOGI(kTag, "radar updated with %zu contacts", contacts.size());
       if (lvgl_port_lock(0)) {
@@ -60,11 +63,23 @@ void opensky_poll_task(void *arg) {
 }  // namespace
 
 extern "C" void app_main() {
+  ESP_ERROR_CHECK(config_store::init());
+
   const lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
   ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
 
   ESP_ERROR_CHECK(display.init());
   ESP_ERROR_CHECK(touch.init(display.lvgl_display()));
+
+  config_store::Config config;
+  if (!config_store::load(config)) {
+    ESP_LOGI(kTag, "no saved config, entering setup mode");
+    if (lvgl_port_lock(0)) {
+      ui::build_setup_screen(provisioning::kApSsid);
+      lvgl_port_unlock();
+    }
+    provisioning::run();  // Never returns; reboots once the form is submitted.
+  }
 
   if (lvgl_port_lock(0)) {
     ui::build_radar_screen(radar, plane_table);
@@ -74,7 +89,11 @@ extern "C" void app_main() {
     ESP_LOGE(kTag, "Failed to lock LVGL for UI setup");
   }
 
-  ESP_ERROR_CHECK(wifi.connect());
+  g_home_latitude_deg = config.home_latitude_deg;
+  g_home_longitude_deg = config.home_longitude_deg;
+  opensky.set_credentials(config.opensky_client_id, config.opensky_client_secret);
+
+  ESP_ERROR_CHECK(wifi.connect(config.wifi_ssid, config.wifi_password));
 
   xTaskCreate(opensky_poll_task, "opensky_poll", 8192, nullptr, tskIDLE_PRIORITY + 1, nullptr);
 }

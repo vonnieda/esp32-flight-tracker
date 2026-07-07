@@ -9,4 +9,8 @@ namespace ui {
 // (tail number/altitude) filling the remaining width on the right.
 void build_radar_screen(RadarView &radar, PlaneTableView &plane_table);
 
+// Builds the first-boot setup screen shown while provisioning.hpp's captive
+// portal is up, telling the user which SoftAP to join and what URL to open.
+void build_setup_screen(const char *ap_ssid);
+
 }  // namespace ui

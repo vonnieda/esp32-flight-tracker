@@ -11,7 +11,6 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "geo.hpp"
-#include "secrets_config.hpp"
 
 namespace {
 constexpr char kTag[] = "opensky";
@@ -41,6 +40,11 @@ std::string trim_trailing_spaces(const std::string &s) {
 }
 }  // namespace
 
+void OpenSkyClient::set_credentials(std::string client_id, std::string client_secret) {
+  client_id_ = std::move(client_id);
+  client_secret_ = std::move(client_secret);
+}
+
 esp_err_t OpenSkyClient::fetch_token() {
   std::string response_body;
 
@@ -60,7 +64,7 @@ esp_err_t OpenSkyClient::fetch_token() {
   char post_field[256];
   std::snprintf(post_field, sizeof(post_field),
                "grant_type=client_credentials&client_id=%s&client_secret=%s",
-               secrets::kOpenSkyClientId, secrets::kOpenSkyClientSecret);
+               client_id_.c_str(), client_secret_.c_str());
   esp_http_client_set_header(client, "Content-Type", "application/x-www-form-urlencoded");
   esp_http_client_set_post_field(client, post_field, static_cast<int>(std::strlen(post_field)));
 

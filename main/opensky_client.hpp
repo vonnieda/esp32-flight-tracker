@@ -12,6 +12,10 @@
 // receiver position.
 class OpenSkyClient {
  public:
+  // Must be called once before fetch_contacts(), with the client_id/secret
+  // from a registered OpenSky account (https://opensky-network.org/).
+  void set_credentials(std::string client_id, std::string client_secret);
+
   // Populates out_contacts with aircraft within a bounding box around
   // (home_lat_deg, home_lon_deg) sized to cover range_km. Returns ESP_OK on
   // success (out_contacts may be empty if no traffic is nearby).
@@ -22,6 +26,8 @@ class OpenSkyClient {
   esp_err_t ensure_token();
   esp_err_t fetch_token();
 
+  std::string client_id_;
+  std::string client_secret_;
   std::string access_token_;
   int64_t token_expires_at_us_ = 0;
 };

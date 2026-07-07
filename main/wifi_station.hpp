@@ -1,12 +1,13 @@
 #pragma once
 
+#include <string>
+
 #include "esp_err.h"
 
-// Connects to the hardcoded access point in secrets_config.hpp and
-// transparently reconnects on drop.
+// Connects to an access point and transparently reconnects on drop.
 class WifiStation {
  public:
   // Blocks until the first successful connection. Later drops are retried
   // in the background without blocking callers.
-  esp_err_t connect();
+  esp_err_t connect(const std::string &ssid, const std::string &password);
 };

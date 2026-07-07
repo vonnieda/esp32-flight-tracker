@@ -10,8 +10,6 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
-#include "nvs_flash.h"
-#include "secrets_config.hpp"
 
 namespace {
 constexpr char kTag[] = "wifi";
@@ -34,14 +32,7 @@ void on_wifi_or_ip_event(void *arg, esp_event_base_t base, int32_t id, void *dat
 }
 }  // namespace
 
-esp_err_t WifiStation::connect() {
-  esp_err_t err = nvs_flash_init();
-  if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    ESP_RETURN_ON_ERROR(nvs_flash_erase(), kTag, "nvs erase");
-    err = nvs_flash_init();
-  }
-  ESP_RETURN_ON_ERROR(err, kTag, "nvs init");
-
+esp_err_t WifiStation::connect(const std::string &ssid, const std::string &password) {
   g_event_group = xEventGroupCreate();
 
   ESP_RETURN_ON_ERROR(esp_netif_init(), kTag, "netif init");
@@ -64,15 +55,15 @@ esp_err_t WifiStation::connect() {
 
   wifi_config_t wifi_config{};
   std::snprintf(reinterpret_cast<char *>(wifi_config.sta.ssid), sizeof(wifi_config.sta.ssid), "%s",
-               secrets::kWifiSsid);
+               ssid.c_str());
   std::snprintf(reinterpret_cast<char *>(wifi_config.sta.password),
-               sizeof(wifi_config.sta.password), "%s", secrets::kWifiPassword);
+               sizeof(wifi_config.sta.password), "%s", password.c_str());
 
   ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), kTag, "set mode");
   ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_config), kTag, "set config");
   ESP_RETURN_ON_ERROR(esp_wifi_start(), kTag, "wifi start");
 
-  ESP_LOGI(kTag, "connecting to %s...", secrets::kWifiSsid);
+  ESP_LOGI(kTag, "connecting to %s...", ssid.c_str());
   xEventGroupWaitBits(g_event_group, kConnectedBit, pdFALSE, pdFALSE, portMAX_DELAY);
 
   return ESP_OK;

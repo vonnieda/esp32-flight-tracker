@@ -9,6 +9,8 @@ idf_component_register(
         "geo.cpp"
         "wifi_station.cpp"
         "opensky_client.cpp"
+        "config_store.cpp"
+        "provisioning.cpp"
     INCLUDE_DIRS "."
     PRIV_REQUIRES
         esp_driver_ledc
@@ -17,6 +19,8 @@ idf_component_register(
         esp_event
         nvs_flash
         esp_http_client
+        esp_http_server
+        lwip
         mbedtls
         esp_timer
 )
