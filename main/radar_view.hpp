@@ -26,6 +26,12 @@ class RadarView {
 
   void set_range_km(float range_km);
 
+  // Draws the static map outline (coastlines/borders/etc. from map_data.h)
+  // as background reference lines, plotted relative to the receiver's
+  // position the same way blips are. Call once, after set_range_km(), since
+  // it bakes in the current range_km_ and never repositions afterward.
+  void set_map_center(float home_lat_deg, float home_lon_deg);
+
   // Plots contacts, reusing blip widgets across calls. Contacts beyond the
   // current range are shown as a small dot clamped to the scope's edge
   // (along their true bearing) rather than a full heading icon.
@@ -72,4 +78,9 @@ class RadarView {
   float range_km_ = 20.0f;
   int radius_px_ = 0;
   std::vector<Blip> blips_;
+
+  // Backing point storage for the map's lv_lines. Kept alongside map_lines_
+  // for their lifetime since lv_line_set_points() just stores the pointer.
+  std::vector<std::vector<lv_point_precise_t>> map_line_points_;
+  std::vector<lv_obj_t *> map_lines_;
 };

@@ -136,7 +136,7 @@ void PlaneTableView::render() {
 
     lv_label_set_text(row.flight_label, aircraft.callsign.c_str());
     lv_label_set_text_fmt(row.speed_label, "%d", speed_kts);
-    lv_label_set_text_fmt(row.distance_label, "%.1f", static_cast<double>(distance_km));
+    lv_label_set_text_fmt(row.distance_label, "%.1f", distance_km);
     if (aircraft.altitude_ft >= kAltitudeAbbreviateThresholdFt) {
       lv_label_set_text_fmt(row.altitude_label, "%dk",
                             static_cast<int>(std::lround(aircraft.altitude_ft / 1000.0f)));

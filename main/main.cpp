@@ -97,6 +97,7 @@ extern "C" void app_main() {
     settings_view.init(radar_screen);
     ui::build_radar_screen(radar, plane_table, status_icon, settings_view.screen());
     radar.set_range_km(kRadarRangeKm);
+    radar.set_map_center(config.home_latitude_deg, config.home_longitude_deg);
     lvgl_port_unlock();
   } else {
     ESP_LOGE(kTag, "Failed to lock LVGL for UI setup");
