@@ -83,3 +83,12 @@ esp_err_t config_store::save(const Config &config) {
   nvs_close(handle);
   return err;
 }
+
+esp_err_t config_store::clear() {
+  nvs_handle_t handle;
+  ESP_RETURN_ON_ERROR(nvs_open(kNamespace, NVS_READWRITE, &handle), kTag, "open");
+  esp_err_t err = nvs_erase_all(handle);
+  err = err == ESP_OK ? nvs_commit(handle) : err;
+  nvs_close(handle);
+  return err;
+}

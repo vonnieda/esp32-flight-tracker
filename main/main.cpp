@@ -1,6 +1,8 @@
 #include <vector>
 
 #include "config_store.hpp"
+#include "connection_status.hpp"
+#include "connection_status_icon.hpp"
 #include "contact.hpp"
 #include "display.hpp"
 #include "esp_err.h"
@@ -12,6 +14,7 @@
 #include "plane_table_view.hpp"
 #include "provisioning.hpp"
 #include "radar_view.hpp"
+#include "settings_view.hpp"
 #include "touch.hpp"
 #include "ui.hpp"
 #include "wifi_station.hpp"
@@ -31,6 +34,8 @@ RadarView radar;
 PlaneTableView plane_table;
 WifiStation wifi;
 OpenSkyClient opensky;
+ConnectionStatusIcon status_icon;
+SettingsView settings_view;
 
 float g_home_latitude_deg = 0.0f;
 float g_home_longitude_deg = 0.0f;
@@ -48,6 +53,7 @@ void opensky_poll_task(void *arg) {
                                                  kQueryRangeKm, contacts);
     if (err == ESP_OK) {
       ESP_LOGI(kTag, "radar updated with %zu contacts", contacts.size());
+      connection_status::set(connection_status::State::kDataFlowing);
       if (lvgl_port_lock(0)) {
         radar.update(contacts);
         plane_table.update(contacts);
@@ -55,6 +61,11 @@ void opensky_poll_task(void *arg) {
       }
     } else {
       ESP_LOGW(kTag, "OpenSky fetch failed: %s", esp_err_to_name(err));
+      // Don't downgrade past what wifi_station already reflects (it sets
+      // kDisconnected/kWifiConnected itself); only reflect a lost token.
+      if (opensky.has_valid_token()) {
+        connection_status::set(connection_status::State::kAuthenticated);
+      }
     }
 
     vTaskDelay(pdMS_TO_TICKS(kPollIntervalMs));
@@ -82,7 +93,9 @@ extern "C" void app_main() {
   }
 
   if (lvgl_port_lock(0)) {
-    ui::build_radar_screen(radar, plane_table);
+    lv_obj_t *radar_screen = lv_screen_active();
+    settings_view.init(radar_screen);
+    ui::build_radar_screen(radar, plane_table, status_icon, settings_view.screen());
     radar.set_range_km(kRadarRangeKm);
     lvgl_port_unlock();
   } else {

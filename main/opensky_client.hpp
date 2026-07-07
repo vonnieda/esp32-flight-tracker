@@ -22,6 +22,11 @@ class OpenSkyClient {
   esp_err_t fetch_contacts(float home_lat_deg, float home_lon_deg, float range_km,
                           std::vector<Contact> &out_contacts);
 
+  // Whether a still-live OAuth2 token is currently held, i.e. the last
+  // ensure_token() succeeded and it hasn't expired yet. Used by main.cpp to
+  // report connection_status after a failed fetch_contacts() call.
+  bool has_valid_token() const;
+
  private:
   esp_err_t ensure_token();
   esp_err_t fetch_token();

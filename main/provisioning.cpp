@@ -38,9 +38,9 @@ button{margin-top:1.5em;width:100%;padding:.75em;font-size:1em}
 <h2>Flight Tracker Setup</h2>
 <form method="POST" action="/save">
 <label>WiFi SSID</label><input name="ssid" required>
-<label>WiFi Password</label><input name="password" type="password">
+<label>WiFi Password</label><input name="password">
 <label>OpenSky Client ID</label><input name="opensky_id">
-<label>OpenSky Client Secret</label><input name="opensky_secret" type="password">
+<label>OpenSky Client Secret</label><input name="opensky_secret">
 <label>Home Latitude</label><input name="lat" type="number" step="any" required>
 <label>Home Longitude</label><input name="lon" type="number" step="any" required>
 <button type="submit">Save &amp; Connect</button>

@@ -11,6 +11,9 @@ idf_component_register(
         "opensky_client.cpp"
         "config_store.cpp"
         "provisioning.cpp"
+        "connection_status.cpp"
+        "connection_status_icon.cpp"
+        "settings_view.cpp"
     INCLUDE_DIRS "."
     PRIV_REQUIRES
         esp_driver_ledc

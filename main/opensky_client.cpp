@@ -102,8 +102,12 @@ esp_err_t OpenSkyClient::fetch_token() {
   return ESP_OK;
 }
 
+bool OpenSkyClient::has_valid_token() const {
+  return !access_token_.empty() && esp_timer_get_time() < token_expires_at_us_;
+}
+
 esp_err_t OpenSkyClient::ensure_token() {
-  if (!access_token_.empty() && esp_timer_get_time() < token_expires_at_us_) {
+  if (has_valid_token()) {
     return ESP_OK;
   }
   return fetch_token();

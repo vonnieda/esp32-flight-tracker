@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "connection_status.hpp"
 #include "esp_check.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -24,9 +25,11 @@ void on_wifi_or_ip_event(void *arg, esp_event_base_t base, int32_t id, void *dat
     esp_wifi_connect();
   } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
     ESP_LOGW(kTag, "disconnected, reconnecting");
+    connection_status::set(connection_status::State::kDisconnected);
     esp_wifi_connect();
   } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
     ESP_LOGI(kTag, "connected");
+    connection_status::set(connection_status::State::kWifiConnected);
     xEventGroupSetBits(g_event_group, kConnectedBit);
   }
 }

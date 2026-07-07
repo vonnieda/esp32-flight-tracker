@@ -8,7 +8,8 @@ namespace {
 constexpr int kRadarContainerSize = 260;
 }  // namespace
 
-void ui::build_radar_screen(RadarView &radar, PlaneTableView &plane_table) {
+void ui::build_radar_screen(RadarView &radar, PlaneTableView &plane_table,
+                           ConnectionStatusIcon &status_icon, lv_obj_t *settings_screen) {
   lv_obj_t *screen = lv_screen_active();
   lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), 0);
   lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
@@ -26,6 +27,8 @@ void ui::build_radar_screen(RadarView &radar, PlaneTableView &plane_table) {
   radar.init(radar_container);
 
   plane_table.init(screen, kRadarContainerSize);
+
+  status_icon.init(screen, settings_screen);
 }
 
 void ui::build_setup_screen(const char *ap_ssid) {

@@ -28,4 +28,8 @@ bool load(Config &out);
 
 esp_err_t save(const Config &config);
 
+// Erases the saved config, so the next boot falls back into
+// provisioning.hpp's captive portal.
+esp_err_t clear();
+
 }  // namespace config_store
