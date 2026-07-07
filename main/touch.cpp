@@ -36,15 +36,19 @@ esp_err_t Touch::init(lv_display_t *display) {
                      "create touch panel io");
 
   esp_lcd_touch_config_t touch_config{};
-  touch_config.x_max = board::kDisplayWidth;
-  touch_config.y_max = board::kDisplayHeight;
+  // x_max/y_max bound esp_lcd_touch's own mirror math, which runs on the
+  // raw pre-swap axes -- so these are the native panel dimensions, not the
+  // post-rotation display dimensions (see board_config.hpp's kTouchSwapXy
+  // comment).
+  touch_config.x_max = board::kPanelWidth;
+  touch_config.y_max = board::kPanelHeight;
   touch_config.rst_gpio_num = GPIO_NUM_NC;
   touch_config.int_gpio_num = GPIO_NUM_NC;
   touch_config.levels.reset = 0;
   touch_config.levels.interrupt = 0;
-  touch_config.flags.swap_xy = board::kSwapXy;
-  touch_config.flags.mirror_x = board::kMirrorX;
-  touch_config.flags.mirror_y = board::kMirrorY;
+  touch_config.flags.swap_xy = board::kTouchSwapXy;
+  touch_config.flags.mirror_x = board::kTouchMirrorX;
+  touch_config.flags.mirror_y = board::kTouchMirrorY;
   ESP_RETURN_ON_ERROR(esp_lcd_touch_new_i2c_ft5x06(io_handle, &touch_config, &touch_handle_), kTag,
                      "create ft5x06 touch driver");
 

@@ -35,10 +35,8 @@ inline constexpr size_t kPanelHeight = 480;
 inline constexpr size_t kDisplayWidth = kPanelHeight;   // 480
 inline constexpr size_t kDisplayHeight = kPanelWidth;   // 320
 
-// Hardware rotation/mirroring applied via esp_lvgl_port, and the matching
-// transform applied to raw touch coordinates so touches line up with what's
-// drawn. If the image or touch comes up mirrored/rotated on your unit, flip
-// these and reflash.
+// Hardware rotation/mirroring applied via esp_lvgl_port. If the image comes
+// up mirrored/rotated on your unit, flip these and reflash.
 inline constexpr bool kSwapXy = true;
 inline constexpr bool kMirrorX = false;
 inline constexpr bool kMirrorY = false;
@@ -49,5 +47,21 @@ inline constexpr gpio_num_t kTouchSdaPin = GPIO_NUM_6;
 inline constexpr gpio_num_t kTouchSclPin = GPIO_NUM_5;
 inline constexpr i2c_port_num_t kTouchI2cPort = I2C_NUM_1;
 inline constexpr uint32_t kTouchI2cClockHz = 400 * 1000;
+
+// Deliberately separate from kSwapXy/kMirrorX/kMirrorY above rather than
+// reusing them: esp_lcd_panel's swap/mirror (used for the LCD image) and
+// esp_lcd_touch's swap/mirror (used here) apply in different orders --
+// esp_lcd_touch mirrors the raw pre-swap axes (using x_max/y_max as the
+// *native* panel dimensions, kPanelWidth/kPanelHeight, not the post-rotation
+// kDisplayWidth/kDisplayHeight) and only swaps afterward -- so despite both
+// wrapping the same physical rotation, an image-correct combination doesn't
+// necessarily also give a touch-correct one. Tuned against the physical
+// unit: touch alone came up with its narrow (post-swap Y) axis inverted
+// (tapping the bottom-left hit what was drawn top-left), fixed by mirroring
+// the touch controller's raw X axis (which becomes the display's Y axis
+// after the swap).
+inline constexpr bool kTouchSwapXy = true;
+inline constexpr bool kTouchMirrorX = true;
+inline constexpr bool kTouchMirrorY = false;
 
 }  // namespace board
