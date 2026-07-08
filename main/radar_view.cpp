@@ -7,22 +7,22 @@
 #include "plane_color.hpp"
 
 namespace {
-// The scope (rings/sweep/blips) fills the whole widget so the circle
-// dominates the available area; cardinal labels sit just inside the ring
-// rather than carving out a separate margin band for them.
+// The scope (rings/blips) fills the whole widget so the circle dominates
+// the available area; cardinal labels sit just inside the ring rather than
+// carving out a separate margin band for them.
 constexpr int kDiameterPx = 260;
 constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
 
 constexpr int kEdgeDotDiameterPx = 5;
-
-// Matches main.cpp's OpenSky poll interval so the sweep completes one lap
-// per data refresh.
-constexpr uint32_t kSweepPeriodMs = 30000;
+constexpr int kBlipLineWidthPx = 2;
 
 // How often blip positions are advanced by dead reckoning (speed/heading)
-// in between OpenSky refreshes, so aircraft appear to move continuously
-// rather than jumping every 30s.
-constexpr uint32_t kMotionTickMs = 100;
+// in between OpenSky refreshes. Matches PlaneTableView's own tick so the two
+// views stay in lockstep -- both were 100ms originally, but that traded
+// smooth motion for a real FPS cost (see the FPS investigation); once a
+// second is still perfectly readable for aircraft that move over minutes,
+// not seconds.
+constexpr uint32_t kMotionTickMs = 1000;
 
 // Upper bound on simultaneous contacts. Held via reserve() so blips_ never
 // reallocates after a blip's lv_line has been pointed at its icon_points
@@ -40,7 +40,6 @@ constexpr lv_color_t kColorInnerRing = LV_COLOR_MAKE(0x00, 0x4d, 0x14);
 constexpr lv_color_t kColorCompassText = LV_COLOR_MAKE(0xff, 0xff, 0xff);
 constexpr lv_color_t kColorRangeText = LV_COLOR_MAKE(0x00, 0xcc, 0x33);
 constexpr lv_color_t kColorCenterDot = LV_COLOR_MAKE(0x66, 0xff, 0x66);
-constexpr lv_color_t kColorSweep = LV_COLOR_MAKE(0x33, 0xff, 0x33);
 // Dimmer than the range rings so the map reads as background context rather
 // than competing with blips/rings for attention.
 constexpr lv_color_t kColorMap = LV_COLOR_MAKE(0x00, 0x33, 0x0a);
@@ -64,8 +63,8 @@ void RadarView::init(lv_obj_t *parent) {
 
   // No border on radar_area_ itself: LVGL insets a widget's content area (and
   // thus every lv_obj_center()'d/positioned child) by its own border width,
-  // which would leave sweep_line_/blip icons -- sized and positioned to the
-  // *outer* box below -- off-center relative to the rings and center dot.
+  // which would leave blip icons -- sized and positioned to the *outer* box
+  // below -- off-center relative to the rings and center dot.
   // The outer ring is instead drawn as its own bordered child, same as the
   // two inner rings.
   radar_area_ = lv_obj_create(parent);
@@ -93,31 +92,6 @@ void RadarView::init(lv_obj_t *parent) {
   }
 
   radius_px_ = kDiameterPx / 2;
-
-  // Sweep beam: an lv_line spanning the whole scope so its point coordinates
-  // are plain radar_area_-local pixels. Its two points (center + rotating
-  // edge point) are recomputed by hand each animation tick and the object
-  // is invalidated manually -- see the class comment in radar_view.hpp for
-  // why this avoids lv_obj's transform_rotation style.
-  sweep_points_[0] = {radius_px_, radius_px_};
-  sweep_points_[1] = {radius_px_ + radius_px_, radius_px_};
-
-  sweep_line_ = lv_line_create(radar_area_);
-  lv_obj_set_size(sweep_line_, kDiameterPx, kDiameterPx);
-  lv_obj_set_pos(sweep_line_, 0, 0);
-  lv_line_set_points(sweep_line_, sweep_points_.data(), 2);
-  lv_obj_set_style_line_width(sweep_line_, 2, 0);
-  lv_obj_set_style_line_color(sweep_line_, kColorSweep, 0);
-  lv_obj_set_style_line_opa(sweep_line_, LV_OPA_COVER, 0);
-
-  lv_anim_t sweep_anim;
-  lv_anim_init(&sweep_anim);
-  lv_anim_set_var(&sweep_anim, this);
-  lv_anim_set_values(&sweep_anim, 0, 3600);
-  lv_anim_set_duration(&sweep_anim, kSweepPeriodMs);
-  lv_anim_set_repeat_count(&sweep_anim, LV_ANIM_REPEAT_INFINITE);
-  lv_anim_set_exec_cb(&sweep_anim, sweep_anim_cb);
-  lv_anim_start(&sweep_anim);
 
   lv_obj_t *center_dot = lv_obj_create(radar_area_);
   lv_obj_remove_style_all(center_dot);
@@ -183,21 +157,10 @@ void RadarView::set_map_center(float home_lat_deg, float home_lon_deg) {
     lv_obj_set_style_line_width(line, 1, 0);
     lv_obj_set_style_line_color(line, kColorMap, 0);
     lv_obj_set_style_line_opa(line, LV_OPA_COVER, 0);
-    // Behind the rings/sweep/blips, which were already created in init().
+    // Behind the rings/blips, which were already created in init().
     lv_obj_move_to_index(line, 0);
     map_lines_.push_back(line);
   }
-}
-
-void RadarView::set_sweep_angle_tenths(int32_t tenths) {
-  const float angle_rad = (static_cast<float>(tenths) / 10.0f) * kDegToRad;
-  sweep_points_[1].x = radius_px_ + static_cast<int32_t>(std::lround(radius_px_ * std::cos(angle_rad)));
-  sweep_points_[1].y = radius_px_ + static_cast<int32_t>(std::lround(radius_px_ * std::sin(angle_rad)));
-  lv_obj_invalidate(sweep_line_);
-}
-
-void RadarView::sweep_anim_cb(void *var, int32_t value) {
-  static_cast<RadarView *>(var)->set_sweep_angle_tenths(value);
 }
 
 void RadarView::ensure_blip_count(size_t count) {
@@ -211,8 +174,11 @@ void RadarView::ensure_blip_count(size_t count) {
     lv_obj_set_size(blip.icon, kDiameterPx, kDiameterPx);
     lv_obj_set_pos(blip.icon, 0, 0);
     lv_line_set_points(blip.icon, blip.icon_points.data(), blip.icon_points.size());
-    lv_obj_set_style_line_width(blip.icon, 2, 0);
-    lv_obj_set_style_line_rounded(blip.icon, true, 0);
+    lv_obj_set_style_line_width(blip.icon, kBlipLineWidthPx, 0);
+    // Rounded joints cost an extra masked circle-fill draw per segment (see
+    // lv_draw_sw_line.c) on top of the already-masked line body -- at this
+    // icon's ~14px size the mitered corners from leaving it off are
+    // imperceptible, and the icon is redrawn on every motion tick.
     lv_obj_add_flag(blip.icon, LV_OBJ_FLAG_HIDDEN);
 
     blip.label = lv_label_create(radar_area_);
@@ -281,7 +247,6 @@ void RadarView::reposition_blip(Blip &blip) const {
     for (size_t i = 0; i < blip.heading_offsets.size(); ++i) {
       blip.icon_points[i] = {cx + blip.heading_offsets[i].x, cy + blip.heading_offsets[i].y};
     }
-    lv_obj_invalidate(blip.icon);
     lv_obj_align(blip.label, LV_ALIGN_CENTER, x_off, y_off + 14);
   } else if (distance_km > 0.0f) {
     // Out of display range but still within the (wider) query radius --
@@ -311,6 +276,11 @@ void RadarView::tick_motion() {
     blip.north_km += delta_km * std::cos(heading_rad);
     reposition_blip(blip);
   }
+  // One invalidate for the whole tick rather than a precise dirty rect per
+  // blip: LVGL's own per-call invalidate-area bookkeeping turned out to cost
+  // more than the extra pixels a full-area redraw pushes (measured 3x faster
+  // this way with 11 blips -- see the FPS investigation).
+  lv_obj_invalidate(radar_area_);
 }
 
 void RadarView::motion_timer_cb(lv_timer_t *timer) {
@@ -331,4 +301,5 @@ void RadarView::update(std::span<const Contact> contacts) {
       lv_obj_add_flag(blips_[i].edge_dot, LV_OBJ_FLAG_HIDDEN);
     }
   }
+  lv_obj_invalidate(radar_area_);
 }

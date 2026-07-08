@@ -99,6 +99,11 @@ esp_err_t Display::init() {
   lvgl_port_display_cfg_t disp_cfg{};
   disp_cfg.io_handle = io_handle_;
   disp_cfg.panel_handle = panel_handle_;
+  // full_refresh doesn't work here: LVGL_PORT_DISP_TYPE_OTHER (i80/SPI)
+  // panels push it through the same async tx_color path as partial mode, and
+  // a whole-frame transfer needs enough chained DMA descriptors that the i80
+  // driver's descriptor ring (GDMA "owner" recycling) can't keep up --
+  // observed as "lli full ... avail=0" asserts once redraws stacked up.
   disp_cfg.buffer_size = board::kDisplayWidth * 40;
   disp_cfg.double_buffer = true;
   disp_cfg.hres = board::kDisplayWidth;

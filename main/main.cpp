@@ -76,7 +76,13 @@ void opensky_poll_task(void *arg) {
 extern "C" void app_main() {
   ESP_ERROR_CHECK(config_store::init());
 
-  const lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+  lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+  // Default task_affinity is -1 (unpinned), which left the LVGL task (tick +
+  // layout + render + flush, all on one task) free to float onto core 0 --
+  // the same core WiFi (CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0) and esp_timer
+  // (CONFIG_ESP_TIMER_TASK_AFFINITY_CPU0) are hard-pinned to. Pinning LVGL to
+  // core 1 keeps it off that contention (see the FPS investigation).
+  lvgl_cfg.task_affinity = 1;
   ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
 
   ESP_ERROR_CHECK(display.init());

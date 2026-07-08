@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <numeric>
 
 #include "plane_color.hpp"
@@ -24,10 +25,15 @@ constexpr float kAltitudeAbbreviateThresholdFt = 10000.0f;
 // Caps the list to a screenful regardless of how many contacts the (wider)
 // query radius returns; nearest-first sort means anything beyond this is
 // the least relevant traffic anyway.
-constexpr size_t kMaxTableRows = 16;
+constexpr size_t kMaxTableRows = 11;
 
-// Matches RadarView's motion tick so the two views drift in lockstep.
-constexpr uint32_t kMotionTickMs = 100;
+// Was 100 (matching RadarView's own tick so the two views drift in
+// lockstep, still true at 1000). Re-rasterizing all 4 labels' text 10x/sec
+// was a real FPS cost (see the FPS investigation) that cutting LVGL call
+// *count* alone (see the recolor usage below) didn't fix -- only cutting
+// how often the text gets redrawn did. Once a second is imperceptible for
+// distances that only change over tens of seconds.
+constexpr uint32_t kMotionTickMs = 1000;
 
 lv_obj_t *make_row_container(lv_obj_t *parent) {
   lv_obj_t *row = lv_obj_create(parent);
@@ -89,19 +95,27 @@ PlaneTableView::Row &PlaneTableView::ensure_row(size_t index) {
     Row row;
     row.container = make_row_container(list_area_);
 
+    // Recolor lets each label's per-aircraft color ride along in the same
+    // lv_label_set_text_fmt() call (as a "#rrggbb text#" span) instead of a
+    // separate lv_obj_set_style_text_color() call -- halves the LVGL calls
+    // render() makes per row, per tick (see the FPS investigation).
     row.flight_label = lv_label_create(row.container);
     lv_label_set_long_mode(row.flight_label, LV_LABEL_LONG_CLIP);
+    lv_label_set_recolor(row.flight_label, true);
     lv_obj_set_flex_grow(row.flight_label, 1);
 
     row.speed_label = lv_label_create(row.container);
+    lv_label_set_recolor(row.speed_label, true);
     lv_obj_set_width(row.speed_label, kSpeedColWidth);
     lv_obj_set_style_text_align(row.speed_label, LV_TEXT_ALIGN_RIGHT, 0);
 
     row.distance_label = lv_label_create(row.container);
+    lv_label_set_recolor(row.distance_label, true);
     lv_obj_set_width(row.distance_label, kDistanceColWidth);
     lv_obj_set_style_text_align(row.distance_label, LV_TEXT_ALIGN_RIGHT, 0);
 
     row.altitude_label = lv_label_create(row.container);
+    lv_label_set_recolor(row.altitude_label, true);
     lv_obj_set_width(row.altitude_label, kAltitudeColWidth);
     lv_obj_set_style_text_align(row.altitude_label, LV_TEXT_ALIGN_RIGHT, 0);
 
@@ -131,22 +145,20 @@ void PlaneTableView::render() {
     const float distance_km =
         std::sqrt(aircraft.east_km * aircraft.east_km + aircraft.north_km * aircraft.north_km);
     const lv_color_t color = plane_color::for_callsign(aircraft.callsign);
+    char color_hex[7];
+    std::snprintf(color_hex, sizeof(color_hex), "%02x%02x%02x", color.red, color.green, color.blue);
 
     const int speed_kts = static_cast<int>(std::lround(aircraft.speed_mps * kMpsToKnots));
 
-    lv_label_set_text(row.flight_label, aircraft.callsign.c_str());
-    lv_label_set_text_fmt(row.speed_label, "%d", speed_kts);
-    lv_label_set_text_fmt(row.distance_label, "%.1f", distance_km);
+    lv_label_set_text_fmt(row.flight_label, "#%s %s#", color_hex, aircraft.callsign.c_str());
+    lv_label_set_text_fmt(row.speed_label, "#%s %d#", color_hex, speed_kts);
+    lv_label_set_text_fmt(row.distance_label, "#%s %.1f#", color_hex, distance_km);
     if (aircraft.altitude_ft >= kAltitudeAbbreviateThresholdFt) {
-      lv_label_set_text_fmt(row.altitude_label, "%dk",
+      lv_label_set_text_fmt(row.altitude_label, "#%s %dk#", color_hex,
                             static_cast<int>(std::lround(aircraft.altitude_ft / 1000.0f)));
     } else {
-      lv_label_set_text_fmt(row.altitude_label, "%d", static_cast<int>(aircraft.altitude_ft));
+      lv_label_set_text_fmt(row.altitude_label, "#%s %d#", color_hex, static_cast<int>(aircraft.altitude_ft));
     }
-    lv_obj_set_style_text_color(row.flight_label, color, 0);
-    lv_obj_set_style_text_color(row.speed_label, color, 0);
-    lv_obj_set_style_text_color(row.distance_label, color, 0);
-    lv_obj_set_style_text_color(row.altitude_label, color, 0);
     lv_obj_clear_flag(row.container, LV_OBJ_FLAG_HIDDEN);
   }
   for (size_t i = shown; i < rows_.size(); ++i) {
