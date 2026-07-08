@@ -22,8 +22,12 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
 CONFIG_FREERTOS_HZ=1000
 
-# WiFi/TLS/HTTP/JSON push the app past the default 1MB app partition.
-CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+# Custom layout (see partitions.csv): two 4MB OTA app slots -- WiFi/TLS/
+# HTTP/JSON already push the app well past the default 1MB partition, and
+# 16MB of flash has plenty of room to spare -- plus a dedicated "actypes"
+# NVS partition for aircraft_type_client's on-flash lookup cache.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
 # LVGL's own built-in sprintf doesn't format floats correctly; use the C
 # library's instead (see main/radar_view.cpp's range label for why this

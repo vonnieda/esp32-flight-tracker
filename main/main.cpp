@@ -1,5 +1,7 @@
 #include <vector>
 
+#include "aircraft_type_client.hpp"
+#include "airport_client.hpp"
 #include "config_store.hpp"
 #include "connection_status.hpp"
 #include "connection_status_icon.hpp"
@@ -37,6 +39,7 @@ Touch touch;
 RadarView radar;
 PlaneTableView plane_table;
 OpenSkyClient opensky;
+AircraftTypeClient aircraft_types;
 ConnectionStatusIcon status_icon;
 SettingsView settings_view;
 
@@ -61,15 +64,31 @@ void dead_reckon_timer_cb(lv_timer_t *timer) {
 void opensky_poll_task(void *arg) {
   (void)arg;
   std::vector<Contact> fetched;
+  bool airports_loaded = false;
 
   // Give the network stack a moment to settle after association (DNS/routing
   // aren't always immediately usable the instant we get an IP).
   vTaskDelay(pdMS_TO_TICKS(2000));
 
   while (true) {
+    // Airports are static; fetch them once (retrying until the first
+    // success) and hand them to the radar as background scenery.
+    if (!airports_loaded) {
+      std::vector<Airport> airports;
+      if (airport_client::fetch_airports(config.home_latitude_deg, config.home_longitude_deg,
+                                         kRadarRangeKm, airports) == ESP_OK) {
+        airports_loaded = true;
+        if (lvgl_port_lock(0)) {
+          radar.set_airports(airports);
+          lvgl_port_unlock();
+        }
+      }
+    }
+
     const esp_err_t err = opensky.fetch_contacts(config.home_latitude_deg,
                                                  config.home_longitude_deg, kQueryRangeKm, fetched);
     if (err == ESP_OK) {
+      aircraft_types.annotate(fetched);
       ESP_LOGI(kTag, "radar updated with %zu contacts", fetched.size());
       connection_status::set(connection_status::State::kDataFlowing);
       if (lvgl_port_lock(0)) {
@@ -126,6 +145,7 @@ extern "C" void app_main() {
   }
 
   opensky.set_credentials(config.opensky_client_id, config.opensky_client_secret);
+  aircraft_types.start();
 
   ESP_ERROR_CHECK(wifi_station::connect(config.wifi_ssid, config.wifi_password));
 

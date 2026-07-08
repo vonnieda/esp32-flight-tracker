@@ -2,15 +2,13 @@
 
 #include <cmath>
 #include <cstdio>
-#include <cstring>
 
 #include "cJSON.h"
 #include "esp_check.h"
-#include "esp_crt_bundle.h"
-#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "geo.hpp"
+#include "http_fetch.hpp"
 
 namespace {
 constexpr char kTag[] = "opensky";
@@ -21,48 +19,12 @@ constexpr char kStatesUrlBase[] = "https://opensky-network.org/api/states/all";
 // Refresh a bit before the token actually expires to avoid races.
 constexpr int64_t kExpiryMarginUs = 30LL * 1000 * 1000;
 
-esp_err_t http_append_body_handler(esp_http_client_event_t *evt) {
-  if (evt->event_id == HTTP_EVENT_ON_DATA) {
-    auto *body = static_cast<std::string *>(evt->user_data);
-    body->append(static_cast<const char *>(evt->data), evt->data_len);
-  }
-  return ESP_OK;
-}
-
-// Shared plumbing for both OpenSky endpoints: HTTPS via the certificate
-// bundle, the response body collected into out_body, and any non-200 status
-// treated as an error. A non-null post_body makes the request a POST.
-esp_err_t http_request(const char *url, const char *header_name, const char *header_value,
-                       const char *post_body, std::string &out_body) {
-  esp_http_client_config_t config{};
-  config.url = url;
-  config.method = post_body != nullptr ? HTTP_METHOD_POST : HTTP_METHOD_GET;
-  config.event_handler = http_append_body_handler;
-  config.user_data = &out_body;
-  config.crt_bundle_attach = esp_crt_bundle_attach;
-  config.timeout_ms = 15000;
-  config.buffer_size = 4096;
-  config.buffer_size_tx = 4096;
-
-  esp_http_client_handle_t client = esp_http_client_init(&config);
-  ESP_RETURN_ON_FALSE(client != nullptr, ESP_FAIL, kTag, "failed to init http client");
-
-  esp_http_client_set_header(client, header_name, header_value);
-  if (post_body != nullptr) {
-    esp_http_client_set_post_field(client, post_body, static_cast<int>(std::strlen(post_body)));
-  }
-
-  const esp_err_t err = esp_http_client_perform(client);
-  const int status = esp_http_client_get_status_code(client);
-  esp_http_client_cleanup(client);
-
-  if (err != ESP_OK || status != 200) {
-    ESP_LOGE(kTag, "request to %s failed (err=%s, status=%d, body=%s)", url, esp_err_to_name(err),
-             status, out_body.c_str());
-    return ESP_FAIL;
-  }
-  return ESP_OK;
-}
+// OpenSky keeps returning an aircraft's last known state for a while after
+// it stops transmitting (e.g. right after landing), with the old velocity
+// still attached -- which made landed planes "fly" across the scope via dead
+// reckoning and snap back every poll. Drop any state whose position or
+// overall report is older than this relative to the response timestamp.
+constexpr double kMaxStateAgeS = 60.0;
 
 // Trims the trailing spaces OpenSky pads callsigns with.
 std::string trim_trailing_spaces(const std::string &s) {
@@ -85,8 +47,8 @@ esp_err_t OpenSkyClient::fetch_token() {
 
   ESP_LOGI(kTag, "requesting token from %s", kTokenUrl);
   std::string response_body;
-  ESP_RETURN_ON_ERROR(http_request(kTokenUrl, "Content-Type", "application/x-www-form-urlencoded",
-                                   post_body.c_str(), response_body),
+  ESP_RETURN_ON_ERROR(http_fetch(kTokenUrl, "Content-Type", "application/x-www-form-urlencoded",
+                                 post_body.c_str(), response_body),
                       kTag, "token request");
 
   cJSON *root = cJSON_Parse(response_body.c_str());
@@ -141,13 +103,17 @@ esp_err_t OpenSkyClient::fetch_contacts(float home_lat_deg, float home_lon_deg, 
 
   ESP_LOGI(kTag, "requesting states: %s", url);
   std::string response_body;
-  ESP_RETURN_ON_ERROR(http_request(url, "Authorization", auth_header.c_str(), nullptr,
-                                   response_body),
+  ESP_RETURN_ON_ERROR(http_fetch(url, "Authorization", auth_header.c_str(), nullptr,
+                                 response_body),
                       kTag, "states request");
   ESP_LOGI(kTag, "states response: %zu bytes", response_body.size());
 
   cJSON *root = cJSON_Parse(response_body.c_str());
   ESP_RETURN_ON_FALSE(root != nullptr, ESP_FAIL, kTag, "failed to parse states response");
+
+  const cJSON *response_time_item = cJSON_GetObjectItemCaseSensitive(root, "time");
+  const double response_time =
+      cJSON_IsNumber(response_time_item) ? response_time_item->valuedouble : 0.0;
 
   const cJSON *states = cJSON_GetObjectItemCaseSensitive(root, "states");
   if (!cJSON_IsArray(states)) {
@@ -162,7 +128,10 @@ esp_err_t OpenSkyClient::fetch_contacts(float home_lat_deg, float home_lon_deg, 
     if (!cJSON_IsArray(state)) {
       continue;
     }
+    const cJSON *icao24_item = cJSON_GetArrayItem(state, 0);
     const cJSON *callsign_item = cJSON_GetArrayItem(state, 1);
+    const cJSON *time_position_item = cJSON_GetArrayItem(state, 3);
+    const cJSON *last_contact_item = cJSON_GetArrayItem(state, 4);
     const cJSON *longitude_item = cJSON_GetArrayItem(state, 5);
     const cJSON *latitude_item = cJSON_GetArrayItem(state, 6);
     const cJSON *baro_altitude_item = cJSON_GetArrayItem(state, 7);
@@ -176,6 +145,13 @@ esp_err_t OpenSkyClient::fetch_contacts(float home_lat_deg, float home_lon_deg, 
     if (cJSON_IsTrue(on_ground_item)) {
       continue;  // Not interesting for an overhead radar.
     }
+    if (response_time > 0.0 &&
+        ((cJSON_IsNumber(time_position_item) &&
+          response_time - time_position_item->valuedouble > kMaxStateAgeS) ||
+         (cJSON_IsNumber(last_contact_item) &&
+          response_time - last_contact_item->valuedouble > kMaxStateAgeS))) {
+      continue;  // Stale last-known state; the aircraft likely landed.
+    }
 
     const auto latitude = static_cast<float>(latitude_item->valuedouble);
     const auto longitude = static_cast<float>(longitude_item->valuedouble);
@@ -183,13 +159,14 @@ esp_err_t OpenSkyClient::fetch_contacts(float home_lat_deg, float home_lon_deg, 
                                                        longitude);
 
     Contact contact;
+    contact.icao24 = cJSON_IsString(icao24_item) ? icao24_item->valuestring : "";
     contact.callsign =
         cJSON_IsString(callsign_item) ? trim_trailing_spaces(callsign_item->valuestring) : "?";
     contact.east_km = position.east_km;
     contact.north_km = position.north_km;
     contact.altitude_ft = cJSON_IsNumber(baro_altitude_item)
                              ? static_cast<float>(baro_altitude_item->valuedouble) * 3.28084f
-                             : 0.0f;
+                             : NAN;
     contact.track_deg =
         cJSON_IsNumber(true_track_item) ? static_cast<float>(true_track_item->valuedouble) : 0.0f;
     contact.ground_speed_mps =

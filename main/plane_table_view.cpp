@@ -125,7 +125,7 @@ void PlaneTableView::update(std::span<const Contact> contacts) {
     const float distance_km = std::sqrt(distance_squared_km(contact));
     const int speed_kts = static_cast<int>(std::lround(contact.ground_speed_mps * kMpsToKnots));
 
-    const lv_color_t color = plane_color::for_callsign(contact.callsign);
+    const lv_color_t color = plane_color::for_altitude_ft(contact.altitude_ft);
     for (lv_obj_t *label :
          {row.flight_label, row.speed_label, row.distance_label, row.altitude_label}) {
       lv_obj_set_style_text_color(label, color, 0);
@@ -134,7 +134,9 @@ void PlaneTableView::update(std::span<const Contact> contacts) {
     lv_label_set_text(row.flight_label, contact.callsign.c_str());
     lv_label_set_text_fmt(row.speed_label, "%d", speed_kts);
     lv_label_set_text_fmt(row.distance_label, "%.1f", distance_km);
-    if (contact.altitude_ft >= kAltitudeAbbreviateThresholdFt) {
+    if (std::isnan(contact.altitude_ft)) {
+      lv_label_set_text(row.altitude_label, "-");
+    } else if (contact.altitude_ft >= kAltitudeAbbreviateThresholdFt) {
       lv_label_set_text_fmt(row.altitude_label, "%dk",
                             static_cast<int>(std::lround(contact.altitude_ft / 1000.0f)));
     } else {

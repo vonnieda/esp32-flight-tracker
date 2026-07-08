@@ -1,0 +1,12 @@
+# Name,     Type, SubType, Offset,  Size, Flags
+nvs,        data, nvs,     ,        0x6000,
+otadata,    data, ota,     ,        0x2000,
+phy_init,   data, phy,     ,        0x1000,
+# Dedicated NVS partition for aircraft_type_client's icao24->PlaneClass
+# lookup cache, kept separate from the "nvs" partition above (wifi/opensky/
+# home-location config) so it can grow/be wiped independently.
+actypes,    data, nvs,     ,        0x10000,
+# 16MB flash gives plenty of room for two full OTA app slots at 4MB each,
+# well past anything this app is likely to grow to.
+ota_0,      app,  ota_0,   ,        4M,
+ota_1,      app,  ota_1,   ,        4M,

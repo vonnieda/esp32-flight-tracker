@@ -4,11 +4,13 @@
 #include <span>
 #include <vector>
 
+#include "airport_client.hpp"
 #include "contact.hpp"
 #include "lvgl.h"
 
 // A radar-scope widget: range rings, compass labels, a faint map outline,
-// and one blip (heading-oriented plane icon + callsign label) per contact.
+// airport markers, and one blip (heading-oriented plane icon + callsign
+// label) per contact. The icon shape follows the contact's PlaneClass.
 class RadarView {
  public:
   // Scope diameter; also used by ui.cpp to size the neighboring table.
@@ -25,6 +27,10 @@ class RadarView {
   // bakes in the current range and never repositions afterward.
   void set_map_center(float home_lat_deg, float home_lon_deg);
 
+  // Marks each in-range airport with a small dot plus its designation.
+  // Replaces any airports from a previous call.
+  void set_airports(std::span<const Airport> airports);
+
   // Plots contacts, reusing blip widgets across calls. Contacts beyond the
   // current range are shown as a small dot clamped to the scope's edge
   // (along their true bearing) rather than a full plane icon.
@@ -36,6 +42,7 @@ class RadarView {
     lv_obj_t *label = nullptr;     // Callsign, drawn just below the icon.
     lv_obj_t *edge_dot = nullptr;  // Shown instead of icon/label when the
                                    // contact is beyond range_km_.
+    PlaneClass shape = PlaneClass::kUnknown;  // Shape the icon currently has.
   };
 
   void add_compass_label(const char *text, lv_align_t align, int x_ofs, int y_ofs);
@@ -45,6 +52,7 @@ class RadarView {
   lv_obj_t *range_label_ = nullptr;
   float range_km_ = 20.0f;
   std::vector<Blip> blips_;
+  std::vector<lv_obj_t *> airport_markers_;
 
   // Backing point storage for the map outline's lv_lines, which keep
   // pointing into these vectors for their lifetime.

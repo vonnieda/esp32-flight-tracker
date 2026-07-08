@@ -13,15 +13,51 @@ constexpr int kRadiusPx = RadarView::kDiameterPx / 2;
 constexpr int kEdgeDotDiameterPx = 5;
 constexpr int kBlipLineWidthPx = 2;
 
-// A small dart/chevron pointing "up" (north), shared by every blip's
-// lv_line; each contact's track is applied with the transform_rotation
-// style. The points sit centered in a kPlaneIconSizePx box, with a margin so
-// the stroke isn't clipped at the box edge; the box center is the aircraft's
-// position and the rotation pivot.
+// Blip icon shapes, one per PlaneClass, each a single polyline pointing "up"
+// (north); each contact's track is applied with the transform_rotation
+// style. Where the silhouette needs separate strokes (wings, tail, rotor)
+// the polyline retraces itself, which draws invisibly over the existing
+// stroke. The points sit centered in a kPlaneIconSizePx box, with a margin
+// so the stroke isn't clipped at the box edge; the box center is the
+// aircraft's position and the rotation pivot.
 constexpr int kPlaneIconSizePx = 18;
-constexpr lv_point_precise_t kPlaneShape[] = {
+
+// Generic chevron for contacts whose type isn't known (yet).
+constexpr lv_point_precise_t kShapeUnknown[] = {
     {9, 2}, {16, 15}, {9, 11}, {2, 15}, {9, 2},
 };
+// Long fuselage, swept wings, small tailplane.
+constexpr lv_point_precise_t kShapeAirliner[] = {
+    {9, 1},  {9, 7},  {2, 10}, {9, 7},  {16, 10}, {9, 7},
+    {9, 13}, {5, 16}, {9, 13}, {13, 16}, {9, 13}, {9, 16},
+};
+// Short fuselage, straight wings well forward.
+constexpr lv_point_precise_t kShapeSmall[] = {
+    {9, 3}, {9, 6}, {3, 6}, {15, 6}, {9, 6}, {9, 13}, {6, 14}, {12, 14},
+};
+// Rotor disc drawn as an X, with a tail boom trailing "south".
+constexpr lv_point_precise_t kShapeHelicopter[] = {
+    {4, 4}, {14, 14}, {9, 9}, {14, 4}, {4, 14}, {9, 9}, {9, 16},
+};
+
+struct IconShape {
+  const lv_point_precise_t *points;
+  uint32_t count;
+};
+
+IconShape shape_for_class(PlaneClass plane_class) {
+  switch (plane_class) {
+    case PlaneClass::kAirliner:
+      return {kShapeAirliner, std::size(kShapeAirliner)};
+    case PlaneClass::kSmall:
+      return {kShapeSmall, std::size(kShapeSmall)};
+    case PlaneClass::kHelicopter:
+      return {kShapeHelicopter, std::size(kShapeHelicopter)};
+    case PlaneClass::kUnknown:
+    default:
+      return {kShapeUnknown, std::size(kShapeUnknown)};
+  }
+}
 
 // Old-school phosphor-scope palette: black scope, everything else green.
 constexpr lv_color_t kColorBackground = LV_COLOR_MAKE(0x00, 0x00, 0x00);
@@ -34,6 +70,10 @@ constexpr lv_color_t kColorCenterDot = LV_COLOR_MAKE(0x66, 0xff, 0x66);
 // Dimmer than the range rings so the map reads as background context rather
 // than competing with blips/rings for attention.
 constexpr lv_color_t kColorMap = LV_COLOR_MAKE(0x00, 0x33, 0x0a);
+// Airports are static scenery like the map, but need to stay legible; match
+// the outer ring so they read as chrome, not traffic.
+constexpr lv_color_t kColorAirport = LV_COLOR_MAKE(0x00, 0x8f, 0x11);
+constexpr int kAirportDotDiameterPx = 4;
 }  // namespace
 
 void RadarView::add_compass_label(const char *text, lv_align_t align, int x_ofs, int y_ofs) {
@@ -137,13 +177,51 @@ void RadarView::set_map_center(float home_lat_deg, float home_lon_deg) {
   }
 }
 
+void RadarView::set_airports(std::span<const Airport> airports) {
+  for (lv_obj_t *marker : airport_markers_) {
+    lv_obj_delete(marker);
+  }
+  airport_markers_.clear();
+
+  for (const Airport &airport : airports) {
+    const float distance_km =
+        std::sqrt(airport.east_km * airport.east_km + airport.north_km * airport.north_km);
+    if (distance_km > range_km_) {
+      continue;  // The fetch bbox corners can poke past the circular scope.
+    }
+    const auto x_off = static_cast<int32_t>(std::lround((airport.east_km / range_km_) * kRadiusPx));
+    const auto y_off =
+        static_cast<int32_t>(std::lround(-(airport.north_km / range_km_) * kRadiusPx));
+
+    lv_obj_t *dot = lv_obj_create(radar_area_);
+    lv_obj_remove_style_all(dot);
+    lv_obj_set_size(dot, kAirportDotDiameterPx, kAirportDotDiameterPx);
+    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(dot, kColorAirport, 0);
+    lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+    lv_obj_align(dot, LV_ALIGN_CENTER, x_off, y_off);
+
+    lv_obj_t *label = lv_label_create(radar_area_);
+    lv_label_set_text(label, airport.ident.c_str());
+    lv_obj_set_style_text_color(label, kColorAirport, 0);
+    lv_obj_align(label, LV_ALIGN_CENTER, x_off, y_off + 11);
+
+    // Behind blips (and everything else) so live traffic always draws over
+    // the scenery.
+    lv_obj_move_to_index(dot, 0);
+    lv_obj_move_to_index(label, 0);
+    airport_markers_.push_back(dot);
+    airport_markers_.push_back(label);
+  }
+}
+
 void RadarView::ensure_blip_count(size_t count) {
   while (blips_.size() < count) {
     Blip blip;
 
     blip.icon = lv_line_create(radar_area_);
     lv_obj_set_size(blip.icon, kPlaneIconSizePx, kPlaneIconSizePx);
-    lv_line_set_points(blip.icon, kPlaneShape, std::size(kPlaneShape));
+    lv_line_set_points(blip.icon, kShapeUnknown, std::size(kShapeUnknown));
     lv_obj_set_style_line_width(blip.icon, kBlipLineWidthPx, 0);
     lv_obj_set_style_transform_pivot_x(blip.icon, kPlaneIconSizePx / 2, 0);
     lv_obj_set_style_transform_pivot_y(blip.icon, kPlaneIconSizePx / 2, 0);
@@ -180,13 +258,18 @@ void RadarView::update(std::span<const Contact> contacts) {
     const float distance_km =
         std::sqrt(contact.east_km * contact.east_km + contact.north_km * contact.north_km);
     const bool in_range = distance_km <= range_km_;
-    const lv_color_t color = plane_color::for_callsign(contact.callsign);
+    const lv_color_t color = plane_color::for_altitude_ft(contact.altitude_ft);
 
     if (in_range) {
       const auto x_off =
           static_cast<int32_t>(std::lround((contact.east_km / range_km_) * kRadiusPx));
       const auto y_off =
           static_cast<int32_t>(std::lround(-(contact.north_km / range_km_) * kRadiusPx));
+      if (blip.shape != contact.plane_class) {
+        const IconShape shape = shape_for_class(contact.plane_class);
+        lv_line_set_points(blip.icon, shape.points, shape.count);
+        blip.shape = contact.plane_class;
+      }
       lv_obj_align(blip.icon, LV_ALIGN_CENTER, x_off, y_off);
       lv_obj_set_style_transform_rotation(
           blip.icon, static_cast<int32_t>(std::lround(contact.track_deg * 10.0f)), 0);

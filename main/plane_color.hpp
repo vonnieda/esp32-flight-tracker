@@ -1,36 +1,42 @@
 #pragma once
 
-#include <cstddef>
-#include <cstdint>
-#include <string>
+#include <cmath>
 
 #include "lvgl.h"
 
-// Assigns each aircraft a stable, distinguishable color derived from its
-// callsign, so the same plane's blip on RadarView and row in
-// PlaneTableView are visually paired without the two widgets needing to
-// share any state -- they just hash the same callsign independently.
+// Maps an aircraft's altitude to one of a few fixed color bands, low/warm to
+// high/cool. Both RadarView and PlaneTableView derive their colors from the
+// same altitude, so a plane's blip and its table row stay visually paired
+// without the two widgets sharing any state.
 namespace plane_color {
 
-inline lv_color_t for_callsign(const std::string &callsign) {
-  static constexpr lv_color_t kPalette[] = {
-      LV_COLOR_MAKE(0x39, 0xff, 0x14),  // green
-      LV_COLOR_MAKE(0x00, 0xd9, 0xff),  // cyan
-      LV_COLOR_MAKE(0xff, 0xd4, 0x00),  // yellow
-      LV_COLOR_MAKE(0xff, 0x8a, 0x00),  // orange
-      LV_COLOR_MAKE(0xff, 0x4d, 0xd2),  // magenta
-      LV_COLOR_MAKE(0x8a, 0x8a, 0xff),  // periwinkle
-      LV_COLOR_MAKE(0xff, 0x5a, 0x5a),  // coral
-      LV_COLOR_MAKE(0x7c, 0xff, 0xb2),  // mint
-  };
-  constexpr size_t kPaletteSize = sizeof(kPalette) / sizeof(kPalette[0]);
-
-  uint32_t hash = 2166136261u;  // FNV-1a
-  for (char c : callsign) {
-    hash ^= static_cast<uint8_t>(c);
-    hash *= 16777619u;
+inline lv_color_t for_altitude_ft(float altitude_ft) {
+  if (std::isnan(altitude_ft)) {
+    return LV_COLOR_MAKE(0x9a, 0x9a, 0x9a);  // gray: altitude unknown
   }
-  return kPalette[hash % kPaletteSize];
+  // Below 10k gets four bands instead of two -- near an airport, most
+  // traffic is in this range (climbing out / descending to land), so a
+  // single "yellow" band there washed out most of the picture. Bands are
+  // spread evenly around the hue wheel for max contrast, not by meaning.
+  if (altitude_ft < 1000.0f) {
+    return LV_COLOR_MAKE(0xff, 0x00, 0x00);  // red
+  }
+  if (altitude_ft < 3000.0f) {
+    return LV_COLOR_MAKE(0xff, 0xda, 0x00);  // gold
+  }
+  if (altitude_ft < 6000.0f) {
+    return LV_COLOR_MAKE(0x49, 0xff, 0x00);  // green
+  }
+  if (altitude_ft < 10000.0f) {
+    return LV_COLOR_MAKE(0x00, 0xff, 0x92);  // spring green
+  }
+  if (altitude_ft < 20000.0f) {
+    return LV_COLOR_MAKE(0x00, 0x92, 0xff);  // azure
+  }
+  if (altitude_ft < 30000.0f) {
+    return LV_COLOR_MAKE(0x49, 0x00, 0xff);  // violet
+  }
+  return LV_COLOR_MAKE(0xff, 0x00, 0xda);  // magenta
 }
 
 }  // namespace plane_color
