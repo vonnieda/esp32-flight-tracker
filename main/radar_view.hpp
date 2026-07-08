@@ -22,10 +22,13 @@ class RadarView {
 
   void set_range_km(float range_km);
 
-  // Draws the static map outline (coastlines/borders from map_data.h) as
-  // background reference lines. Call once, after set_range_km(), since it
+  // Draws the map outline (coastlines/borders fetched by map_client) as
+  // background reference lines. outline_lat_lon is lat/lon pairs with
+  // NAN,NAN separating each polyline, as produced by
+  // map_client::fetch_outline(). Call once, after set_range_km(), since it
   // bakes in the current range and never repositions afterward.
-  void set_map_center(float home_lat_deg, float home_lon_deg);
+  void set_map_center(float home_lat_deg, float home_lon_deg,
+                      std::span<const float> outline_lat_lon);
 
   // Marks each in-range airport with a small dot plus its designation.
   // Replaces any airports from a previous call.

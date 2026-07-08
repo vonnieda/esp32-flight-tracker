@@ -12,6 +12,7 @@
 #include "esp_lvgl_port.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "map_client.hpp"
 #include "opensky_client.hpp"
 #include "plane_table_view.hpp"
 #include "provisioning.hpp"
@@ -65,6 +66,7 @@ void opensky_poll_task(void *arg) {
   (void)arg;
   std::vector<Contact> fetched;
   bool airports_loaded = false;
+  bool map_loaded = false;
 
   // Give the network stack a moment to settle after association (DNS/routing
   // aren't always immediately usable the instant we get an IP).
@@ -80,6 +82,20 @@ void opensky_poll_task(void *arg) {
         airports_loaded = true;
         if (lvgl_port_lock(0)) {
           radar.set_airports(airports);
+          lvgl_port_unlock();
+        }
+      }
+    }
+
+    // Map outline is static too; fetch and simplify it once (retrying until
+    // the first success) rather than baking a location in at build time.
+    if (!map_loaded) {
+      std::vector<float> outline;
+      if (map_client::fetch_outline(config.home_latitude_deg, config.home_longitude_deg,
+                                    kRadarRangeKm, outline) == ESP_OK) {
+        map_loaded = true;
+        if (lvgl_port_lock(0)) {
+          radar.set_map_center(config.home_latitude_deg, config.home_longitude_deg, outline);
           lvgl_port_unlock();
         }
       }
@@ -137,7 +153,6 @@ extern "C" void app_main() {
     settings_view.init(radar_screen);
     ui::build_radar_screen(radar, plane_table, status_icon, settings_view.screen());
     radar.set_range_km(kRadarRangeKm);
-    radar.set_map_center(config.home_latitude_deg, config.home_longitude_deg);
     lv_timer_create(dead_reckon_timer_cb, kDeadReckonIntervalMs, nullptr);
     lvgl_port_unlock();
   } else {

@@ -13,6 +13,7 @@ idf_component_register(
         "opensky_client.cpp"
         "aircraft_type_client.cpp"
         "airport_client.cpp"
+        "map_client.cpp"
         "config_store.cpp"
         "provisioning.cpp"
         "connection_status.cpp"

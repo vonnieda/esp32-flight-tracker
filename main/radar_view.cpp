@@ -4,7 +4,6 @@
 #include <iterator>
 
 #include "geo.hpp"
-#include "map_data.h"
 #include "plane_color.hpp"
 
 namespace {
@@ -140,12 +139,13 @@ void RadarView::set_range_km(float range_km) {
   }
 }
 
-void RadarView::set_map_center(float home_lat_deg, float home_lon_deg) {
-  // MAP_OUTLINE is lat,lon pairs with NAN,NAN separating each polyline.
+void RadarView::set_map_center(float home_lat_deg, float home_lon_deg,
+                               std::span<const float> outline_lat_lon) {
+  // outline_lat_lon is lat,lon pairs with NAN,NAN separating each polyline.
   std::vector<lv_point_precise_t> current;
-  for (int i = 0; i + 1 < MAP_OUTLINE_LEN; i += 2) {
-    const float lat = MAP_OUTLINE[i];
-    const float lon = MAP_OUTLINE[i + 1];
+  for (size_t i = 0; i + 1 < outline_lat_lon.size(); i += 2) {
+    const float lat = outline_lat_lon[i];
+    const float lon = outline_lat_lon[i + 1];
     if (std::isnan(lat) || std::isnan(lon)) {
       if (current.size() >= 2) {
         map_line_points_.push_back(std::move(current));
