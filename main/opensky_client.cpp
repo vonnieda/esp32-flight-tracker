@@ -17,7 +17,6 @@ constexpr char kTag[] = "opensky";
 constexpr char kTokenUrl[] =
     "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token";
 constexpr char kStatesUrlBase[] = "https://opensky-network.org/api/states/all";
-constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
 
 // Refresh a bit before the token actually expires to avoid races.
 constexpr int64_t kExpiryMarginUs = 30LL * 1000 * 1000;
@@ -26,6 +25,41 @@ esp_err_t http_append_body_handler(esp_http_client_event_t *evt) {
   if (evt->event_id == HTTP_EVENT_ON_DATA) {
     auto *body = static_cast<std::string *>(evt->user_data);
     body->append(static_cast<const char *>(evt->data), evt->data_len);
+  }
+  return ESP_OK;
+}
+
+// Shared plumbing for both OpenSky endpoints: HTTPS via the certificate
+// bundle, the response body collected into out_body, and any non-200 status
+// treated as an error. A non-null post_body makes the request a POST.
+esp_err_t http_request(const char *url, const char *header_name, const char *header_value,
+                       const char *post_body, std::string &out_body) {
+  esp_http_client_config_t config{};
+  config.url = url;
+  config.method = post_body != nullptr ? HTTP_METHOD_POST : HTTP_METHOD_GET;
+  config.event_handler = http_append_body_handler;
+  config.user_data = &out_body;
+  config.crt_bundle_attach = esp_crt_bundle_attach;
+  config.timeout_ms = 15000;
+  config.buffer_size = 4096;
+  config.buffer_size_tx = 4096;
+
+  esp_http_client_handle_t client = esp_http_client_init(&config);
+  ESP_RETURN_ON_FALSE(client != nullptr, ESP_FAIL, kTag, "failed to init http client");
+
+  esp_http_client_set_header(client, header_name, header_value);
+  if (post_body != nullptr) {
+    esp_http_client_set_post_field(client, post_body, static_cast<int>(std::strlen(post_body)));
+  }
+
+  const esp_err_t err = esp_http_client_perform(client);
+  const int status = esp_http_client_get_status_code(client);
+  esp_http_client_cleanup(client);
+
+  if (err != ESP_OK || status != 200) {
+    ESP_LOGE(kTag, "request to %s failed (err=%s, status=%d, body=%s)", url, esp_err_to_name(err),
+             status, out_body.c_str());
+    return ESP_FAIL;
   }
   return ESP_OK;
 }
@@ -46,38 +80,14 @@ void OpenSkyClient::set_credentials(std::string client_id, std::string client_se
 }
 
 esp_err_t OpenSkyClient::fetch_token() {
-  std::string response_body;
-
-  esp_http_client_config_t config{};
-  config.url = kTokenUrl;
-  config.method = HTTP_METHOD_POST;
-  config.event_handler = http_append_body_handler;
-  config.user_data = &response_body;
-  config.crt_bundle_attach = esp_crt_bundle_attach;
-  config.timeout_ms = 10000;
-  config.buffer_size = 4096;
-  config.buffer_size_tx = 4096;
-
-  esp_http_client_handle_t client = esp_http_client_init(&config);
-  ESP_RETURN_ON_FALSE(client != nullptr, ESP_FAIL, kTag, "failed to init http client");
-
-  char post_field[256];
-  std::snprintf(post_field, sizeof(post_field),
-               "grant_type=client_credentials&client_id=%s&client_secret=%s",
-               client_id_.c_str(), client_secret_.c_str());
-  esp_http_client_set_header(client, "Content-Type", "application/x-www-form-urlencoded");
-  esp_http_client_set_post_field(client, post_field, static_cast<int>(std::strlen(post_field)));
+  const std::string post_body =
+      "grant_type=client_credentials&client_id=" + client_id_ + "&client_secret=" + client_secret_;
 
   ESP_LOGI(kTag, "requesting token from %s", kTokenUrl);
-  const esp_err_t err = esp_http_client_perform(client);
-  const int status = esp_http_client_get_status_code(client);
-  esp_http_client_cleanup(client);
-
-  if (err != ESP_OK || status != 200) {
-    ESP_LOGE(kTag, "token request failed (err=%s, status=%d, body=%s)", esp_err_to_name(err),
-             status, response_body.c_str());
-    return ESP_FAIL;
-  }
+  std::string response_body;
+  ESP_RETURN_ON_ERROR(http_request(kTokenUrl, "Content-Type", "application/x-www-form-urlencoded",
+                                   post_body.c_str(), response_body),
+                      kTag, "token request");
 
   cJSON *root = cJSON_Parse(response_body.c_str());
   ESP_RETURN_ON_FALSE(root != nullptr, ESP_FAIL, kTag, "failed to parse token response");
@@ -120,41 +130,20 @@ esp_err_t OpenSkyClient::fetch_contacts(float home_lat_deg, float home_lon_deg, 
   ESP_RETURN_ON_ERROR(ensure_token(), kTag, "ensure token");
 
   const float lat_margin = range_km / 111.0f;
-  const float lon_margin = range_km / (111.0f * std::cos(home_lat_deg * kDegToRad));
+  const float lon_margin = range_km / (111.0f * std::cos(home_lat_deg * geo::kDegToRad));
 
   char url[256];
   std::snprintf(url, sizeof(url), "%s?lamin=%.4f&lomin=%.4f&lamax=%.4f&lomax=%.4f", kStatesUrlBase,
                home_lat_deg - lat_margin, home_lon_deg - lon_margin, home_lat_deg + lat_margin,
                home_lon_deg + lon_margin);
 
-  std::string response_body;
-
-  esp_http_client_config_t config{};
-  config.url = url;
-  config.method = HTTP_METHOD_GET;
-  config.event_handler = http_append_body_handler;
-  config.user_data = &response_body;
-  config.crt_bundle_attach = esp_crt_bundle_attach;
-  config.timeout_ms = 15000;
-  config.buffer_size = 4096;
-  config.buffer_size_tx = 4096;
-
-  esp_http_client_handle_t client = esp_http_client_init(&config);
-  ESP_RETURN_ON_FALSE(client != nullptr, ESP_FAIL, kTag, "failed to init http client");
-
   const std::string auth_header = "Bearer " + access_token_;
-  esp_http_client_set_header(client, "Authorization", auth_header.c_str());
 
   ESP_LOGI(kTag, "requesting states: %s", url);
-  const esp_err_t err = esp_http_client_perform(client);
-  const int status = esp_http_client_get_status_code(client);
-  esp_http_client_cleanup(client);
-
-  if (err != ESP_OK || status != 200) {
-    ESP_LOGE(kTag, "states request failed (err=%s, status=%d, body=%s)", esp_err_to_name(err),
-             status, response_body.c_str());
-    return ESP_FAIL;
-  }
+  std::string response_body;
+  ESP_RETURN_ON_ERROR(http_request(url, "Authorization", auth_header.c_str(), nullptr,
+                                   response_body),
+                      kTag, "states request");
   ESP_LOGI(kTag, "states response: %zu bytes", response_body.size());
 
   cJSON *root = cJSON_Parse(response_body.c_str());
@@ -190,12 +179,14 @@ esp_err_t OpenSkyClient::fetch_contacts(float home_lat_deg, float home_lon_deg, 
 
     const auto latitude = static_cast<float>(latitude_item->valuedouble);
     const auto longitude = static_cast<float>(longitude_item->valuedouble);
+    const geo::EastNorth position = geo::east_north_km(home_lat_deg, home_lon_deg, latitude,
+                                                       longitude);
 
     Contact contact;
     contact.callsign =
         cJSON_IsString(callsign_item) ? trim_trailing_spaces(callsign_item->valuestring) : "?";
-    contact.distance_km = geo::distance_km(home_lat_deg, home_lon_deg, latitude, longitude);
-    contact.bearing_deg = geo::bearing_deg(home_lat_deg, home_lon_deg, latitude, longitude);
+    contact.east_km = position.east_km;
+    contact.north_km = position.north_km;
     contact.altitude_ft = cJSON_IsNumber(baro_altitude_item)
                              ? static_cast<float>(baro_altitude_item->valuedouble) * 3.28084f
                              : 0.0f;

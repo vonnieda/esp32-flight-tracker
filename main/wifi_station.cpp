@@ -35,7 +35,7 @@ void on_wifi_or_ip_event(void *arg, esp_event_base_t base, int32_t id, void *dat
 }
 }  // namespace
 
-esp_err_t WifiStation::connect(const std::string &ssid, const std::string &password) {
+esp_err_t wifi_station::connect(const std::string &ssid, const std::string &password) {
   g_event_group = xEventGroupCreate();
 
   ESP_RETURN_ON_ERROR(esp_netif_init(), kTag, "netif init");

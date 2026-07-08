@@ -76,24 +76,15 @@ std::string url_decode(const std::string &in) {
   return out;
 }
 
-// Looks up `key` in a application/x-www-form-urlencoded body and
+// Looks up `key` in an application/x-www-form-urlencoded body and
 // url-decodes its value into out. Returns false if the key isn't present.
 bool find_field(const std::string &body, const char *key, std::string &out) {
-  const std::string needle = std::string(key) + "=";
-  size_t pos = 0;
-  while (pos < body.size()) {
-    const size_t amp = body.find('&', pos);
-    const size_t end = amp == std::string::npos ? body.size() : amp;
-    if (body.compare(pos, needle.size(), needle) == 0) {
-      out = url_decode(body.substr(pos + needle.size(), end - pos - needle.size()));
-      return true;
-    }
-    if (amp == std::string::npos) {
-      break;
-    }
-    pos = amp + 1;
+  char value[256];
+  if (httpd_query_key_value(body.c_str(), key, value, sizeof(value)) != ESP_OK) {
+    return false;
   }
-  return false;
+  out = url_decode(value);
+  return true;
 }
 
 esp_err_t handle_root(httpd_req_t *req) {
@@ -295,8 +286,4 @@ void provisioning::run() {
 
   ESP_LOGI(kTag, "connect to WiFi '%s' and open http://" IPSTR "/ to configure", kApSsid,
           IP2STR(&g_ap_ip));
-
-  while (true) {
-    vTaskDelay(pdMS_TO_TICKS(1000));
-  }
 }

@@ -2,12 +2,6 @@
 
 #include "lvgl.h"
 
-namespace {
-// Matches RadarView's own scope diameter so its container doesn't clip or
-// leave slack around the circle.
-constexpr int kRadarContainerSize = 260;
-}  // namespace
-
 void ui::build_radar_screen(RadarView &radar, PlaneTableView &plane_table,
                            ConnectionStatusIcon &status_icon, lv_obj_t *settings_screen) {
   lv_obj_t *screen = lv_screen_active();
@@ -20,14 +14,8 @@ void ui::build_radar_screen(RadarView &radar, PlaneTableView &plane_table,
   lv_obj_set_style_pad_column(screen, 10, 0);
   lv_obj_set_style_pad_all(screen, 8, 0);
 
-  lv_obj_t *radar_container = lv_obj_create(screen);
-  lv_obj_remove_style_all(radar_container);
-  lv_obj_set_size(radar_container, kRadarContainerSize, kRadarContainerSize);
-  lv_obj_clear_flag(radar_container, LV_OBJ_FLAG_SCROLLABLE);
-  radar.init(radar_container);
-
-  plane_table.init(screen, kRadarContainerSize);
-
+  radar.init(screen);
+  plane_table.init(screen, RadarView::kDiameterPx);
   status_icon.init(screen, settings_screen);
 }
 

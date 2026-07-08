@@ -1,14 +1,19 @@
 #pragma once
 
+#include <span>
 #include <string>
 
-// A single aircraft plotted on the radar, in coordinates relative to the
-// receiver's own position.
+// A single aircraft, in flat-earth coordinates relative to the receiver's
+// position (kilometers east/north of it).
 struct Contact {
   std::string callsign;
-  float bearing_deg = 0;    // Degrees clockwise from north.
-  float distance_km = 0;    // Great-circle distance from the receiver.
+  float east_km = 0;
+  float north_km = 0;
   float altitude_ft = 0;
-  float track_deg = 0;          // Aircraft's ground track, used for the heading vector.
-  float ground_speed_mps = 0;   // Ground speed, for dead-reckoning the blip between refreshes.
+  float track_deg = 0;  // Ground track, degrees clockwise from north.
+  float ground_speed_mps = 0;
 };
+
+// Advances each contact along its ground track by dt_s seconds, so the
+// display keeps moving between OpenSky refreshes.
+void dead_reckon(std::span<Contact> contacts, float dt_s);

@@ -13,8 +13,9 @@ namespace provisioning {
 // setup instructions shown while the portal is up.
 inline constexpr char kApSsid[] = "FlightTracker-Setup";
 
-// Never returns: blocks serving the portal until the form is submitted, at
-// which point the device reboots.
-[[noreturn]] void run();
+// Brings up the SoftAP, DNS server, and web form, then returns; the servers
+// run on their own tasks until the form is submitted, at which point the
+// device reboots.
+void run();
 
 }  // namespace provisioning
