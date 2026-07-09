@@ -12,6 +12,7 @@
 #include "esp_lvgl_port.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "map_client.hpp"
 #include "opensky_client.hpp"
 #include "plane_table_view.hpp"
 #include "provisioning.hpp"
@@ -33,6 +34,10 @@ constexpr uint32_t kPollIntervalMs = 30000;
 // track (dead reckoning) so the display keeps moving. Once a second is
 // plenty for aircraft that take minutes to cross the scope.
 constexpr uint32_t kDeadReckonIntervalMs = 1000;
+
+// Old-school phosphor-scope palette: dimmer than the range rings so the map
+// reads as background context rather than competing with blips/rings.
+constexpr lv_color_t kColorMapAdmin = LV_COLOR_MAKE(0x00, 0x33, 0x0a);
 
 Display display;
 Touch touch;
@@ -65,6 +70,7 @@ void opensky_poll_task(void *arg) {
   (void)arg;
   std::vector<Contact> fetched;
   bool airports_loaded = false;
+  bool admin_outline_loaded = false;
 
   // Give the network stack a moment to settle after association (DNS/routing
   // aren't always immediately usable the instant we get an IP).
@@ -80,6 +86,21 @@ void opensky_poll_task(void *arg) {
         airports_loaded = true;
         if (lvgl_port_lock(0)) {
           radar.set_airports(airports);
+          lvgl_port_unlock();
+        }
+      }
+    }
+
+    // Map outline is static too; fetch and simplify it once (retrying until
+    // the first success) rather than baking a location in at build time.
+    if (!admin_outline_loaded) {
+      std::vector<float> outline;
+      if (map_client::fetch_admin_outline(config.home_latitude_deg, config.home_longitude_deg,
+                                          kRadarRangeKm, outline) == ESP_OK) {
+        admin_outline_loaded = true;
+        if (lvgl_port_lock(0)) {
+          radar.add_map_outline(config.home_latitude_deg, config.home_longitude_deg, outline,
+                                kColorMapAdmin);
           lvgl_port_unlock();
         }
       }
@@ -137,7 +158,6 @@ extern "C" void app_main() {
     settings_view.init(radar_screen);
     ui::build_radar_screen(radar, plane_table, status_icon, settings_view.screen());
     radar.set_range_km(kRadarRangeKm);
-    radar.set_map_center(config.home_latitude_deg, config.home_longitude_deg);
     lv_timer_create(dead_reckon_timer_cb, kDeadReckonIntervalMs, nullptr);
     lvgl_port_unlock();
   } else {

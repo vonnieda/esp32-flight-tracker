@@ -4,7 +4,6 @@
 #include <iterator>
 
 #include "geo.hpp"
-#include "map_data.h"
 #include "plane_color.hpp"
 
 namespace {
@@ -67,9 +66,6 @@ constexpr lv_color_t kColorInnerRing = LV_COLOR_MAKE(0x00, 0x4d, 0x14);
 constexpr lv_color_t kColorCompassText = LV_COLOR_MAKE(0xff, 0xff, 0xff);
 constexpr lv_color_t kColorRangeText = LV_COLOR_MAKE(0x00, 0xcc, 0x33);
 constexpr lv_color_t kColorCenterDot = LV_COLOR_MAKE(0x66, 0xff, 0x66);
-// Dimmer than the range rings so the map reads as background context rather
-// than competing with blips/rings for attention.
-constexpr lv_color_t kColorMap = LV_COLOR_MAKE(0x00, 0x33, 0x0a);
 // Airports are static scenery like the map, but need to stay legible; match
 // the outer ring so they read as chrome, not traffic.
 constexpr lv_color_t kColorAirport = LV_COLOR_MAKE(0x00, 0x8f, 0x11);
@@ -140,15 +136,17 @@ void RadarView::set_range_km(float range_km) {
   }
 }
 
-void RadarView::set_map_center(float home_lat_deg, float home_lon_deg) {
-  // MAP_OUTLINE is lat,lon pairs with NAN,NAN separating each polyline.
+void RadarView::add_map_outline(float home_lat_deg, float home_lon_deg,
+                                std::span<const float> outline_lat_lon, lv_color_t color) {
+  // outline_lat_lon is lat,lon pairs with NAN,NAN separating each polyline.
+  std::vector<std::vector<lv_point_precise_t>> new_lines;
   std::vector<lv_point_precise_t> current;
-  for (int i = 0; i + 1 < MAP_OUTLINE_LEN; i += 2) {
-    const float lat = MAP_OUTLINE[i];
-    const float lon = MAP_OUTLINE[i + 1];
+  for (size_t i = 0; i + 1 < outline_lat_lon.size(); i += 2) {
+    const float lat = outline_lat_lon[i];
+    const float lon = outline_lat_lon[i + 1];
     if (std::isnan(lat) || std::isnan(lon)) {
       if (current.size() >= 2) {
-        map_line_points_.push_back(std::move(current));
+        new_lines.push_back(std::move(current));
       }
       current.clear();
       continue;
@@ -161,19 +159,20 @@ void RadarView::set_map_center(float home_lat_deg, float home_lon_deg) {
     });
   }
   if (current.size() >= 2) {
-    map_line_points_.push_back(std::move(current));
+    new_lines.push_back(std::move(current));
   }
 
-  for (const auto &points : map_line_points_) {
+  for (auto &points : new_lines) {
     lv_obj_t *line = lv_line_create(radar_area_);
     lv_obj_set_size(line, kDiameterPx, kDiameterPx);
     lv_obj_set_pos(line, 0, 0);
     lv_line_set_points(line, points.data(), points.size());
     lv_obj_set_style_line_width(line, 1, 0);
-    lv_obj_set_style_line_color(line, kColorMap, 0);
+    lv_obj_set_style_line_color(line, color, 0);
     lv_obj_set_style_line_opa(line, LV_OPA_COVER, 0);
     // Behind the rings/blips, which were already created in init().
     lv_obj_move_to_index(line, 0);
+    map_line_points_.push_back(std::move(points));
   }
 }
 
