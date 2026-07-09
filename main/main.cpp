@@ -35,6 +35,10 @@ constexpr uint32_t kPollIntervalMs = 30000;
 // plenty for aircraft that take minutes to cross the scope.
 constexpr uint32_t kDeadReckonIntervalMs = 1000;
 
+// Old-school phosphor-scope palette: dimmer than the range rings so the map
+// reads as background context rather than competing with blips/rings.
+constexpr lv_color_t kColorMapAdmin = LV_COLOR_MAKE(0x00, 0x33, 0x0a);
+
 Display display;
 Touch touch;
 RadarView radar;
@@ -66,7 +70,7 @@ void opensky_poll_task(void *arg) {
   (void)arg;
   std::vector<Contact> fetched;
   bool airports_loaded = false;
-  bool map_loaded = false;
+  bool admin_outline_loaded = false;
 
   // Give the network stack a moment to settle after association (DNS/routing
   // aren't always immediately usable the instant we get an IP).
@@ -89,13 +93,14 @@ void opensky_poll_task(void *arg) {
 
     // Map outline is static too; fetch and simplify it once (retrying until
     // the first success) rather than baking a location in at build time.
-    if (!map_loaded) {
+    if (!admin_outline_loaded) {
       std::vector<float> outline;
-      if (map_client::fetch_outline(config.home_latitude_deg, config.home_longitude_deg,
-                                    kRadarRangeKm, outline) == ESP_OK) {
-        map_loaded = true;
+      if (map_client::fetch_admin_outline(config.home_latitude_deg, config.home_longitude_deg,
+                                          kRadarRangeKm, outline) == ESP_OK) {
+        admin_outline_loaded = true;
         if (lvgl_port_lock(0)) {
-          radar.set_map_center(config.home_latitude_deg, config.home_longitude_deg, outline);
+          radar.add_map_outline(config.home_latitude_deg, config.home_longitude_deg, outline,
+                                kColorMapAdmin);
           lvgl_port_unlock();
         }
       }

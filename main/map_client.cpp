@@ -1,36 +1,26 @@
 #include "map_client.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <limits>
+#include <string>
 #include <utility>
 
 #include "cJSON.h"
 #include "esp_log.h"
 #include "geo.hpp"
 #include "http_fetch.hpp"
+#include "nvs_flash.h"
 
 namespace {
 constexpr char kTag[] = "map_client";
 
-// jsdelivr, not raw.githubusercontent.com: raw.githubusercontent.com
-// aggressively rate-limits (429s) and its ToS explicitly disallows
-// programmatic/repeated access, which every device boot would trip. jsdelivr
-// is a CDN built for exactly this -- serving files out of a GitHub repo to
-// many clients -- and returns identical bytes.
-constexpr char kNeBase[] = "https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/";
-// 1:110m is Natural Earth's whole-world-overview resolution: coastline,
-// country and state borders together are ~600KB total, vs. 10s of MB for the
-// 1:10m data tools/make_map.py fetched -- fine to hold in PSRAM and parse
-// whole with cJSON, no streaming parser needed. Country/state borders are
-// mostly straight lines anyway, so the coarser resolution costs little; it's
-// coastlines that would look blockiest, but that's an acceptable trade for
-// not needing a multi-MB download on every boot.
-constexpr const char *kSourceFiles[] = {
-    "ne_110m_coastline.geojson",
-    "ne_110m_admin_0_boundary_lines_land.geojson",
-    "ne_110m_admin_1_states_provinces_lines.geojson",
-};
+constexpr char kOverpassUrl[] = "https://overpass-api.de/api/interpreter";
+// Comfortably under http_fetch's fixed 15s socket timeout, so a query that's
+// about to time out server-side fails fast instead of us hitting the socket
+// timeout first and losing the (already-computed) partial result.
+constexpr int kOverpassTimeoutSec = 10;
 
 constexpr float kKmPerDegLat = 110.574f;
 constexpr float kKmPerDegLon = 111.320f;  // at equator; scaled by cos(lat).
@@ -38,6 +28,12 @@ constexpr float kKmPerDegLon = 111.320f;  // at equator; scaled by cos(lat).
 // Point budget for the simplified outline; tolerance is raised until the
 // output fits, same as tools/make_map.py's --max-points.
 constexpr size_t kMaxPoints = 4000;
+
+// Dedicated NVS partition (see partitions.csv) for caching fetched/simplified
+// outlines, so a reboot at the same home location doesn't have to re-query
+// Overpass -- same rationale as aircraft_type_client's "actypes" partition.
+constexpr char kCachePartition[] = "mapcache";
+constexpr char kCacheNamespace[] = "outlines";
 
 struct LatLon {
   float lat;
@@ -142,108 +138,99 @@ std::vector<std::vector<LatLon>> build(const std::vector<std::vector<LatLon>> &p
   return out;
 }
 
-std::vector<LatLon> parse_ring(const cJSON *ring) {
+// Overpass's "out geom;" gives each way a "geometry": [{"lat":.., "lon":..},
+// ...] array -- simpler to walk than nested GeoJSON coordinate arrays since
+// there's no Polygon/MultiPolygon ring nesting to handle.
+std::vector<LatLon> parse_geometry(const cJSON *geometry) {
   std::vector<LatLon> pts;
   const cJSON *pt = nullptr;
-  cJSON_ArrayForEach(pt, ring) {
-    const cJSON *lon_item = cJSON_GetArrayItem(pt, 0);
-    const cJSON *lat_item = cJSON_GetArrayItem(pt, 1);
-    if (cJSON_IsNumber(lon_item) && cJSON_IsNumber(lat_item)) {
+  cJSON_ArrayForEach(pt, geometry) {
+    const cJSON *lat_item = cJSON_GetObjectItemCaseSensitive(pt, "lat");
+    const cJSON *lon_item = cJSON_GetObjectItemCaseSensitive(pt, "lon");
+    if (cJSON_IsNumber(lat_item) && cJSON_IsNumber(lon_item)) {
       pts.push_back({static_cast<float>(lat_item->valuedouble), static_cast<float>(lon_item->valuedouble)});
     }
   }
   return pts;
 }
 
-// Yields lists of points from any common GeoJSON geometry.
-void iter_polylines(const cJSON *geometry, std::vector<std::vector<LatLon>> &out) {
-  if (geometry == nullptr) return;
-  const cJSON *type_item = cJSON_GetObjectItemCaseSensitive(geometry, "type");
-  if (!cJSON_IsString(type_item)) return;
-  const char *type = type_item->valuestring;
-  const cJSON *coords = cJSON_GetObjectItemCaseSensitive(geometry, "coordinates");
-
-  if (std::strcmp(type, "LineString") == 0) {
-    out.push_back(parse_ring(coords));
-  } else if (std::strcmp(type, "MultiLineString") == 0 || std::strcmp(type, "Polygon") == 0) {
-    const cJSON *ring = nullptr;
-    cJSON_ArrayForEach(ring, coords) out.push_back(parse_ring(ring));
-  } else if (std::strcmp(type, "MultiPolygon") == 0) {
-    const cJSON *poly = nullptr;
-    cJSON_ArrayForEach(poly, coords) {
-      const cJSON *ring = nullptr;
-      cJSON_ArrayForEach(ring, poly) out.push_back(parse_ring(ring));
-    }
-  } else if (std::strcmp(type, "GeometryCollection") == 0) {
-    const cJSON *g = nullptr;
-    cJSON_ArrayForEach(g, cJSON_GetObjectItemCaseSensitive(geometry, "geometries")) {
-      iter_polylines(g, out);
-    }
-  }
-}
-
-// Fetches one source file and appends its clipped polylines to out_clipped.
-// Failures (network, parse) are logged and swallowed -- best-effort across
-// the three sources, so a single flaky fetch doesn't blank the whole map.
-void fetch_and_clip(const char *url, float lat0, float lon0, float dlat, float dlon,
+// POSTs an Overpass QL query and appends the clipped geometry of every
+// returned way to out_clipped. Failures (network, parse) are logged and
+// swallowed -- the caller treats "nothing came back" as the only failure.
+void fetch_and_clip(const std::string &query, float lat0, float lon0, float dlat, float dlon,
                     std::vector<std::vector<LatLon>> &out_clipped) {
   std::string body;
-  if (http_fetch(url, nullptr, nullptr, nullptr, body) != ESP_OK) {
-    ESP_LOGW(kTag, "fetch failed: %s", url);
+  if (http_fetch(kOverpassUrl, nullptr, nullptr, query.c_str(), body) != ESP_OK) {
+    ESP_LOGW(kTag, "overpass fetch failed");
     return;
   }
   cJSON *root = cJSON_Parse(body.c_str());
   body.clear();
   body.shrink_to_fit();
   if (root == nullptr) {
-    ESP_LOGW(kTag, "parse failed: %s", url);
+    ESP_LOGW(kTag, "overpass response parse failed");
     return;
   }
 
-  const cJSON *features = cJSON_GetObjectItemCaseSensitive(root, "features");
   std::vector<std::vector<LatLon>> raw;
-  if (cJSON_IsArray(features)) {
-    const cJSON *ft = nullptr;
-    cJSON_ArrayForEach(ft, features) {
-      const cJSON *geom = cJSON_GetObjectItemCaseSensitive(ft, "geometry");
-      iter_polylines(geom != nullptr ? geom : ft, raw);
+  const cJSON *element = nullptr;
+  cJSON_ArrayForEach(element, cJSON_GetObjectItemCaseSensitive(root, "elements")) {
+    const cJSON *geometry = cJSON_GetObjectItemCaseSensitive(element, "geometry");
+    if (cJSON_IsArray(geometry)) {
+      raw.push_back(parse_geometry(geometry));
     }
-  } else {
-    iter_polylines(root, raw);
   }
   cJSON_Delete(root);
 
   for (const auto &pl : raw) clip_polyline(pl, lat0, lon0, dlat, dlon, out_clipped);
 }
-}  // namespace
 
-esp_err_t map_client::fetch_outline(float home_lat_deg, float home_lon_deg, float range_km,
-                                    std::vector<float> &out_outline) {
-  out_outline.clear();
+std::string build_admin_query(float lat, float lon, float radius_m) {
+  char buf[512];
+  // way(r) alone would pull every member way of a matched relation -- for a
+  // country or state boundary that's the *entire* national/state border, not
+  // just the segment near home (this crashed the device: multi-MB response,
+  // OOM in http_fetch's response-body string). Re-applying (around:...) to
+  // the way selection clips it back down to just the nearby segment.
+  std::snprintf(buf, sizeof(buf),
+               "[out:json][timeout:%d];\n"
+               "(\n"
+               "  relation[\"boundary\"=\"administrative\"][\"admin_level\"=\"2\"]"
+               "(around:%.0f,%.6f,%.6f);\n"
+               "  relation[\"boundary\"=\"administrative\"][\"admin_level\"=\"4\"]"
+               "(around:%.0f,%.6f,%.6f);\n"
+               ");\n"
+               "way(r)(around:%.0f,%.6f,%.6f);\n"
+               "out geom;",
+               kOverpassTimeoutSec, radius_m, lat, lon, radius_m, lat, lon, radius_m, lat, lon);
+  return buf;
+}
 
+// Validates the home location and derives the clip margins (in degrees, for
+// clip_polyline) and query radius (in meters, for Overpass's "around" filter).
+esp_err_t query_geometry(float home_lat_deg, float home_lon_deg, float range_km, float &coslat,
+                         float &dlat, float &dlon, float &radius_m) {
   if (std::fabs(home_lat_deg) > 85.0f) {
     ESP_LOGE(kTag, "latitudes beyond +/-85 are not supported");
     return ESP_ERR_INVALID_ARG;
   }
-  const float coslat = std::cos(home_lat_deg * geo::kDegToRad);
+  coslat = std::cos(home_lat_deg * geo::kDegToRad);
   // 1.3x margin so the map still covers a later range increase.
-  const float dlat = range_km * 1.3f / kKmPerDegLat;
-  const float dlon = range_km * 1.3f / (kKmPerDegLon * coslat);
+  dlat = range_km * 1.3f / kKmPerDegLat;
+  dlon = range_km * 1.3f / (kKmPerDegLon * coslat);
   if (std::fabs(home_lon_deg) + dlon > 180.0f) {
     ESP_LOGE(kTag, "bounding box would cross the antimeridian - not supported");
     return ESP_ERR_INVALID_ARG;
   }
+  radius_m = range_km * 1.3f * 1000.0f;
+  return ESP_OK;
+}
 
-  std::vector<std::vector<LatLon>> clipped;
-  for (const char *name : kSourceFiles) {
-    const std::string url = std::string(kNeBase) + name;
-    fetch_and_clip(url.c_str(), home_lat_deg, home_lon_deg, dlat, dlon, clipped);
-  }
+esp_err_t simplify_and_flatten(const std::vector<std::vector<LatLon>> &clipped, float coslat,
+                               float range_km, std::vector<float> &out_outline) {
   if (clipped.empty()) {
-    ESP_LOGW(kTag, "no map lines found for this location/range");
     return ESP_FAIL;
   }
-
   // ~1 px on the 456 px radar disc at full radius, floor 0.002 deg.
   float tol = std::fmax(0.002f, 2.0f * range_km / 456.0f / 111.0f);
   std::vector<std::vector<LatLon>> lines;
@@ -253,6 +240,9 @@ esp_err_t map_client::fetch_outline(float home_lat_deg, float home_lon_deg, floa
     for (const auto &l : lines) npts += l.size();
     if (npts <= kMaxPoints || lines.empty()) break;
     tol *= 1.5f;
+  }
+  if (lines.empty()) {
+    return ESP_FAIL;
   }
 
   size_t npts = 0;
@@ -266,5 +256,89 @@ esp_err_t map_client::fetch_outline(float home_lat_deg, float home_lon_deg, floa
     npts += line.size();
   }
   ESP_LOGI(kTag, "%zu polylines, %zu points", lines.size(), npts);
+  return ESP_OK;
+}
+
+void ensure_cache_partition_ready() {
+  static bool initialized = false;
+  if (initialized) return;
+  initialized = true;
+  esp_err_t err = nvs_flash_init_partition(kCachePartition);
+  if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    nvs_flash_erase_partition(kCachePartition);
+    err = nvs_flash_init_partition(kCachePartition);
+  }
+  if (err != ESP_OK) {
+    ESP_LOGW(kTag, "mapcache partition unavailable, outlines won't survive reboot (%s)",
+             esp_err_to_name(err));
+  }
+}
+
+// Cache is keyed by the home coordinates the outline was generated for; a
+// location change is just a cache miss, no separate invalidation needed.
+bool load_from_cache(float home_lat_deg, float home_lon_deg, std::vector<float> &out_outline) {
+  ensure_cache_partition_ready();
+  nvs_handle_t handle;
+  if (nvs_open_from_partition(kCachePartition, kCacheNamespace, NVS_READONLY, &handle) != ESP_OK) {
+    return false;
+  }
+
+  float cached_lat = 0.0f, cached_lon = 0.0f;
+  size_t len = sizeof(float);
+  bool ok = nvs_get_blob(handle, "lat", &cached_lat, &len) == ESP_OK;
+  len = sizeof(float);
+  ok = ok && nvs_get_blob(handle, "lon", &cached_lon, &len) == ESP_OK;
+  ok = ok && cached_lat == home_lat_deg && cached_lon == home_lon_deg;
+
+  if (ok) {
+    len = 0;
+    ok = nvs_get_blob(handle, "pts", nullptr, &len) == ESP_OK && len > 0;
+  }
+  if (ok) {
+    out_outline.resize(len / sizeof(float));
+    ok = nvs_get_blob(handle, "pts", out_outline.data(), &len) == ESP_OK;
+  }
+  nvs_close(handle);
+  if (ok) {
+    ESP_LOGI(kTag, "loaded %zu cached floats from flash", out_outline.size());
+  }
+  return ok;
+}
+
+void store_to_cache(float home_lat_deg, float home_lon_deg, const std::vector<float> &outline) {
+  ensure_cache_partition_ready();
+  nvs_handle_t handle;
+  if (nvs_open_from_partition(kCachePartition, kCacheNamespace, NVS_READWRITE, &handle) != ESP_OK) {
+    return;
+  }
+  nvs_set_blob(handle, "lat", &home_lat_deg, sizeof(float));
+  nvs_set_blob(handle, "lon", &home_lon_deg, sizeof(float));
+  nvs_set_blob(handle, "pts", outline.data(), outline.size() * sizeof(float));
+  nvs_commit(handle);
+  nvs_close(handle);
+}
+}  // namespace
+
+esp_err_t map_client::fetch_admin_outline(float home_lat_deg, float home_lon_deg, float range_km,
+                                          std::vector<float> &out_outline) {
+  out_outline.clear();
+  if (load_from_cache(home_lat_deg, home_lon_deg, out_outline)) {
+    return ESP_OK;
+  }
+
+  float coslat, dlat, dlon, radius_m;
+  const esp_err_t err = query_geometry(home_lat_deg, home_lon_deg, range_km, coslat, dlat, dlon, radius_m);
+  if (err != ESP_OK) return err;
+
+  std::vector<std::vector<LatLon>> clipped;
+  fetch_and_clip(build_admin_query(home_lat_deg, home_lon_deg, radius_m), home_lat_deg, home_lon_deg,
+                dlat, dlon, clipped);
+
+  const esp_err_t simplify_err = simplify_and_flatten(clipped, coslat, range_km, out_outline);
+  if (simplify_err != ESP_OK) {
+    ESP_LOGW(kTag, "no lines found for this location/range");
+    return simplify_err;
+  }
+  store_to_cache(home_lat_deg, home_lon_deg, out_outline);
   return ESP_OK;
 }

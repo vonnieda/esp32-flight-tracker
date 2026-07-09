@@ -10,9 +10,26 @@
 namespace {
 constexpr char kTag[] = "http_fetch";
 
+// Hard ceiling on how much of a response body we'll buffer. Every current
+// caller's legitimate responses are well under this (a few KB to tens of
+// KB); it exists to fail safely against a misbehaving/unexpected response --
+// e.g. an Overpass query whose "around" filter matched a way (a long river,
+// a coastline) that stretches far beyond the queried radius -- rather than
+// growing the response string until the allocator aborts. The event
+// handler's return value isn't checked by esp_http_client, so we can't abort
+// the transfer outright; dropping bytes past the cap makes the body
+// truncated/invalid, which callers already treat as a parse failure.
+constexpr size_t kMaxResponseBytes = 128 * 1024;
+
 esp_err_t append_body_handler(esp_http_client_event_t *evt) {
   if (evt->event_id == HTTP_EVENT_ON_DATA) {
     auto *body = static_cast<std::string *>(evt->user_data);
+    if (body->size() >= kMaxResponseBytes) {
+      return ESP_OK;
+    }
+    if (body->size() + evt->data_len > kMaxResponseBytes) {
+      ESP_LOGW(kTag, "response body exceeds %zu bytes, truncating", kMaxResponseBytes);
+    }
     body->append(static_cast<const char *>(evt->data), evt->data_len);
   }
   return ESP_OK;

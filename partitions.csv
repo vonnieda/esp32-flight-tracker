@@ -6,6 +6,11 @@ phy_init,   data, phy,     ,        0x1000,
 # lookup cache, kept separate from the "nvs" partition above (wifi/opensky/
 # home-location config) so it can grow/be wiped independently.
 actypes,    data, nvs,     ,        0x10000,
+# Dedicated NVS partition for map_client's cached outline blobs (admin
+# boundaries + water), so a reboot at the same home location skips the
+# Overpass round trip. Separate from "nvs" above since a blob per outline is
+# a different access pattern than the small config values stored there.
+mapcache,   data, nvs,     ,        0x8000,
 # 16MB flash gives plenty of room for two full OTA app slots at 4MB each,
 # well past anything this app is likely to grow to.
 ota_0,      app,  ota_0,   ,        4M,
