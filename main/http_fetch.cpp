@@ -21,6 +21,13 @@ constexpr char kTag[] = "http_fetch";
 // truncated/invalid, which callers already treat as a parse failure.
 constexpr size_t kMaxResponseBytes = 128 * 1024;
 
+// Several of the APIs this project talks to (Overpass, adsbdb,
+// aviationweather.gov) are free community/government services whose usage
+// policies ask clients to self-identify, so they can reach out about a
+// misbehaving client instead of just blocking it. The default esp_http_client
+// UA doesn't do that, so every request here identifies itself explicitly.
+constexpr char kUserAgent[] = "esp32-flight-tracker (jason@vonnieda.org)";
+
 esp_err_t append_body_handler(esp_http_client_event_t *evt) {
   if (evt->event_id == HTTP_EVENT_ON_DATA) {
     auto *body = static_cast<std::string *>(evt->user_data);
@@ -44,6 +51,7 @@ esp_err_t http_fetch(const char *url, const char *header_name, const char *heade
   config.event_handler = append_body_handler;
   config.user_data = &out_body;
   config.crt_bundle_attach = esp_crt_bundle_attach;
+  config.user_agent = kUserAgent;
   config.timeout_ms = 15000;
   config.buffer_size = 4096;
   config.buffer_size_tx = 4096;
