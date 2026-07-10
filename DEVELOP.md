@@ -1,6 +1,6 @@
 Build and Flash
 ---
-Requires ESP-IDF (this project was built/tested against a v6.1-dev checkout)
+Requires ESP-IDF (this project was built/tested against a v6.0 checkout)
 with the environment sourced (`. $IDF_PATH/export.sh`), then:
 
 ```
