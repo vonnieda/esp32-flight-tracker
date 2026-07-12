@@ -66,8 +66,21 @@ esp_err_t wifi_station::connect(const std::string &ssid, const std::string &pass
   ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_config), kTag, "set config");
   ESP_RETURN_ON_ERROR(esp_wifi_start(), kTag, "wifi start");
 
+  // This is a mains-powered desk display, not a battery device, so there's
+  // nothing to gain from modem-sleep power save -- and it's the prime
+  // suspect for the "connection zombies overnight" symptom: missed
+  // beacons/ARP during an idle stretch can leave the driver still reporting
+  // associated while no data actually gets through, with no
+  // STA_DISCONNECTED event to trigger a reconnect.
+  ESP_RETURN_ON_ERROR(esp_wifi_set_ps(WIFI_PS_NONE), kTag, "disable power save");
+
   ESP_LOGI(kTag, "connecting to %s...", ssid.c_str());
   xEventGroupWaitBits(g_event_group, kConnectedBit, pdFALSE, pdFALSE, portMAX_DELAY);
 
   return ESP_OK;
+}
+
+void wifi_station::force_reconnect() {
+  ESP_LOGW(kTag, "forcing reconnect");
+  esp_wifi_disconnect();
 }

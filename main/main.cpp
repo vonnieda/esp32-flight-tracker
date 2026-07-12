@@ -1,3 +1,4 @@
+#include <atomic>
 #include <vector>
 
 #include "aircraft_type_client.hpp"
@@ -10,6 +11,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "map_client.hpp"
@@ -35,6 +37,19 @@ constexpr uint32_t kPollIntervalMs = 30000;
 // plenty for aircraft that take minutes to cross the scope.
 constexpr uint32_t kDeadReckonIntervalMs = 1000;
 
+// If OpenSky data hasn't refreshed in this long, contacts are cleared rather
+// than kept dead-reckoning indefinitely -- otherwise an extended outage (e.g.
+// a WiFi link gone stale overnight) walks planes thousands of km off their
+// real position before the next successful fetch snaps them back. 3 minutes
+// is 6 missed 30s polls, generous enough to ride out a transient hiccup.
+constexpr int64_t kStaleContactsUs = 3LL * 60 * 1000000;
+
+// If that many consecutive polls fail while WiFi still reports itself
+// connected, the link is presumed zombied (associated but not passing data,
+// as modem-sleep power save can cause after an idle stretch) and gets a
+// forced disconnect/reconnect to recover it.
+constexpr int kMaxConsecutiveFetchFailures = 6;
+
 // Old-school phosphor-scope palette: dimmer than the range rings so the map
 // reads as background context rather than competing with blips/rings.
 constexpr lv_color_t kColorMapAdmin = LV_COLOR_MAKE(0x00, 0x33, 0x0a);
@@ -55,6 +70,11 @@ config_store::Config config;
 // locks before replacing it.
 std::vector<Contact> contacts;
 
+// Timestamp of the last successful OpenSky fetch, read by the LVGL-task dead
+// reckon timer and written by the poll task -- atomic since it's a lone
+// scalar not otherwise covered by the LVGL-lock convention above.
+std::atomic<int64_t> last_fetch_success_us{0};
+
 void update_views() {
   radar.update(contacts);
   plane_table.update(contacts);
@@ -62,6 +82,17 @@ void update_views() {
 
 void dead_reckon_timer_cb(lv_timer_t *timer) {
   (void)timer;
+  const int64_t last_success = last_fetch_success_us.load(std::memory_order_relaxed);
+  if (last_success != 0 &&
+      esp_timer_get_time() - last_success > kStaleContactsUs) {
+    if (!contacts.empty()) {
+      ESP_LOGW(kTag, "no data for over %lld s, clearing stale contacts",
+               static_cast<long long>(kStaleContactsUs / 1000000));
+      contacts.clear();
+      update_views();
+    }
+    return;
+  }
   dead_reckon(contacts, kDeadReckonIntervalMs / 1000.0f);
   update_views();
 }
@@ -71,6 +102,7 @@ void opensky_poll_task(void *arg) {
   std::vector<Contact> fetched;
   bool airports_loaded = false;
   bool admin_outline_loaded = false;
+  int consecutive_fetch_failures = 0;
 
   // Give the network stack a moment to settle after association (DNS/routing
   // aren't always immediately usable the instant we get an IP).
@@ -109,6 +141,8 @@ void opensky_poll_task(void *arg) {
     const esp_err_t err = opensky.fetch_contacts(config.home_latitude_deg,
                                                  config.home_longitude_deg, kQueryRangeKm, fetched);
     if (err == ESP_OK) {
+      consecutive_fetch_failures = 0;
+      last_fetch_success_us.store(esp_timer_get_time(), std::memory_order_relaxed);
       aircraft_types.annotate(fetched);
       ESP_LOGI(kTag, "radar updated with %zu contacts", fetched.size());
       connection_status::set(connection_status::State::kDataFlowing);
@@ -123,6 +157,18 @@ void opensky_poll_task(void *arg) {
       // kDisconnected/kWifiConnected itself); only reflect a lost token.
       if (opensky.has_valid_token()) {
         connection_status::set(connection_status::State::kAuthenticated);
+      }
+
+      // wifi_station only notices a drop via STA_DISCONNECTED, which a
+      // zombied-but-still-associated link never fires. If fetches keep
+      // failing while WiFi still claims to be connected, force the issue.
+      ++consecutive_fetch_failures;
+      if (consecutive_fetch_failures >= kMaxConsecutiveFetchFailures &&
+          connection_status::get() != connection_status::State::kDisconnected) {
+        ESP_LOGW(kTag, "%d consecutive fetch failures, forcing WiFi reconnect",
+                consecutive_fetch_failures);
+        wifi_station::force_reconnect();
+        consecutive_fetch_failures = 0;
       }
     }
 
