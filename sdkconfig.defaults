@@ -33,3 +33,13 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # library's instead (see main/radar_view.cpp's range label for why this
 # matters).
 CONFIG_LV_USE_CLIB_SPRINTF=y
+
+# IDF's default puts mbedTLS's buffers/contexts (16KB in + 4KB out content
+# buffers per handshake, plus session state) in internal RAM, which this
+# board only has ~270KB of, shared with WiFi buffers, LVGL, etc. Once several
+# TLS clients (OpenSky, airports, adsbdb, Overpass) have each done a few
+# handshakes, internal-heap fragmentation causes mbedtls_ssl_setup() to start
+# failing allocation permanently -- looks like "OpenSky fetch failed" forever
+# with WiFi still fully connected. Route mbedTLS's allocations to the 2MB of
+# SPIRAM this board has instead, since it's otherwise mostly idle.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
