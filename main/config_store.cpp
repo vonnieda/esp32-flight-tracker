@@ -44,13 +44,16 @@ bool config_store::load(Config &out) {
     return false;  // Namespace doesn't exist yet: never configured.
   }
 
+  // Only WiFi credentials are required to leave the captive portal; OpenSky
+  // creds and home location are optional and editable later from the
+  // in-app settings screen, so their absence just leaves the defaults.
   Config loaded;
   const bool ok = get_string(handle, "ssid", loaded.wifi_ssid) == ESP_OK &&
-                  get_string(handle, "pass", loaded.wifi_password) == ESP_OK &&
-                  get_string(handle, "os_id", loaded.opensky_client_id) == ESP_OK &&
-                  get_string(handle, "os_secret", loaded.opensky_client_secret) == ESP_OK &&
-                  get_float(handle, "lat", loaded.home_latitude_deg) == ESP_OK &&
-                  get_float(handle, "lon", loaded.home_longitude_deg) == ESP_OK;
+                  get_string(handle, "pass", loaded.wifi_password) == ESP_OK;
+  get_string(handle, "os_id", loaded.opensky_client_id);
+  get_string(handle, "os_secret", loaded.opensky_client_secret);
+  get_float(handle, "lat", loaded.home_latitude_deg);
+  get_float(handle, "lon", loaded.home_longitude_deg);
   nvs_close(handle);
 
   if (!ok) {

@@ -2,7 +2,6 @@
 
 #include <cerrno>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -39,12 +38,9 @@ button{margin-top:1.5em;width:100%;padding:.75em;font-size:1em}
 <form method="POST" action="/save">
 <label>WiFi SSID</label><input name="ssid" required>
 <label>WiFi Password</label><input name="password">
-<label>OpenSky Client ID</label><input name="opensky_id">
-<label>OpenSky Client Secret</label><input name="opensky_secret">
-<label>Home Latitude</label><input name="lat" type="number" step="any" required>
-<label>Home Longitude</label><input name="lon" type="number" step="any" required>
 <button type="submit">Save &amp; Connect</button>
 </form>
+<p>OpenSky credentials and home location are set later from the device's own Settings screen.</p>
 </body></html>
 )html";
 
@@ -110,14 +106,14 @@ esp_err_t handle_save(httpd_req_t *req) {
     received += static_cast<size_t>(ret);
   }
 
+  // Load whatever's already saved (e.g. OpenSky creds/home location set from
+  // the in-app settings screen on a prior boot) so re-provisioning WiFi
+  // alone doesn't wipe them.
   config_store::Config config;
-  std::string lat_str;
-  std::string lon_str;
-  const bool ok = find_field(body, "ssid", config.wifi_ssid) && !config.wifi_ssid.empty() &&
-                  find_field(body, "lat", lat_str) && find_field(body, "lon", lon_str);
+  config_store::load(config);
+
+  const bool ok = find_field(body, "ssid", config.wifi_ssid) && !config.wifi_ssid.empty();
   find_field(body, "password", config.wifi_password);
-  find_field(body, "opensky_id", config.opensky_client_id);
-  find_field(body, "opensky_secret", config.opensky_client_secret);
 
   if (!ok) {
     httpd_resp_set_status(req, "400 Bad Request");
@@ -125,9 +121,6 @@ esp_err_t handle_save(httpd_req_t *req) {
     httpd_resp_send(req, kSetupPage, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
   }
-
-  config.home_latitude_deg = std::strtof(lat_str.c_str(), nullptr);
-  config.home_longitude_deg = std::strtof(lon_str.c_str(), nullptr);
 
   const esp_err_t save_err = config_store::save(config);
   if (save_err != ESP_OK) {

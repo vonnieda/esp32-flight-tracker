@@ -41,6 +41,10 @@ void OpenSkyClient::set_credentials(std::string client_id, std::string client_se
   client_secret_ = std::move(client_secret);
 }
 
+bool OpenSkyClient::is_authenticated() const {
+  return !client_id_.empty() && !client_secret_.empty();
+}
+
 esp_err_t OpenSkyClient::fetch_token() {
   const std::string post_body =
       "grant_type=client_credentials&client_id=" + client_id_ + "&client_secret=" + client_secret_;
@@ -89,7 +93,13 @@ esp_err_t OpenSkyClient::fetch_contacts(float home_lat_deg, float home_lon_deg, 
                                         std::vector<Contact> &out_contacts) {
   out_contacts.clear();
 
-  ESP_RETURN_ON_ERROR(ensure_token(), kTag, "ensure token");
+  // Without credentials, skip the OAuth2 dance entirely and hit the states
+  // endpoint anonymously -- OpenSky allows this, just at a much lower daily
+  // request quota (see main.cpp's poll interval).
+  const bool authenticated = is_authenticated();
+  if (authenticated) {
+    ESP_RETURN_ON_ERROR(ensure_token(), kTag, "ensure token");
+  }
 
   const float lat_margin = range_km / 111.0f;
   const float lon_margin = range_km / (111.0f * std::cos(home_lat_deg * geo::kDegToRad));
@@ -103,7 +113,8 @@ esp_err_t OpenSkyClient::fetch_contacts(float home_lat_deg, float home_lon_deg, 
 
   ESP_LOGI(kTag, "requesting states: %s", url);
   std::string response_body;
-  ESP_RETURN_ON_ERROR(http_fetch(url, "Authorization", auth_header.c_str(), nullptr,
+  ESP_RETURN_ON_ERROR(http_fetch(url, authenticated ? "Authorization" : nullptr,
+                                 authenticated ? auth_header.c_str() : nullptr, nullptr,
                                  response_body),
                       kTag, "states request");
   ESP_LOGI(kTag, "states response: %zu bytes", response_body.size());

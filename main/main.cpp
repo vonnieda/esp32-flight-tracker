@@ -31,18 +31,30 @@ constexpr float kRadarRangeKm = 15.0f;
 // just beyond the scope can still show up as edge dots (and in the table)
 // before they cross onto the screen.
 constexpr float kQueryRangeKm = kRadarRangeKm * 2.0f;
-constexpr uint32_t kPollIntervalMs = 30000;
+constexpr uint32_t kAuthenticatedPollIntervalMs = 30000;
+// OpenSky's anonymous (unauthenticated) tier has a much smaller daily request
+// quota than a registered client-credentials account, so once no OpenSky
+// credentials are configured (settings_view.hpp), poll far less often to
+// stay under it.
+constexpr uint32_t kUnauthenticatedPollIntervalMs = 5 * 60 * 1000;
 // Between OpenSky refreshes, contacts are advanced along their last known
 // track (dead reckoning) so the display keeps moving. Once a second is
 // plenty for aircraft that take minutes to cross the scope.
 constexpr uint32_t kDeadReckonIntervalMs = 1000;
 
-// If OpenSky data hasn't refreshed in this long, contacts are cleared rather
+// If OpenSky data hasn't refreshed in a while, contacts are cleared rather
 // than kept dead-reckoning indefinitely -- otherwise an extended outage (e.g.
 // a WiFi link gone stale overnight) walks planes thousands of km off their
-// real position before the next successful fetch snaps them back. 3 minutes
-// is 6 missed 30s polls, generous enough to ride out a transient hiccup.
-constexpr int64_t kStaleContactsUs = 3LL * 60 * 1000000;
+// real position before the next successful fetch snaps them back. Expressed
+// as a multiple of missed polls, generous enough to ride out a transient
+// hiccup, rather than a fixed duration, since the poll interval itself varies
+// between the authenticated and unauthenticated tiers.
+constexpr int kStaleAfterMissedPolls = 6;
+
+// Set once at startup from whether OpenSky credentials are configured (see
+// app_main); read by both the dead-reckon timer and the poll task, which is
+// safe since it's fixed before either starts running.
+uint32_t g_poll_interval_ms = kAuthenticatedPollIntervalMs;
 
 // If that many consecutive polls fail while WiFi still reports itself
 // connected, the link is presumed zombied (associated but not passing data,
@@ -82,12 +94,13 @@ void update_views() {
 
 void dead_reckon_timer_cb(lv_timer_t *timer) {
   (void)timer;
+  const int64_t stale_us =
+      kStaleAfterMissedPolls * static_cast<int64_t>(g_poll_interval_ms) * 1000LL;
   const int64_t last_success = last_fetch_success_us.load(std::memory_order_relaxed);
-  if (last_success != 0 &&
-      esp_timer_get_time() - last_success > kStaleContactsUs) {
+  if (last_success != 0 && esp_timer_get_time() - last_success > stale_us) {
     if (!contacts.empty()) {
       ESP_LOGW(kTag, "no data for over %lld s, clearing stale contacts",
-               static_cast<long long>(kStaleContactsUs / 1000000));
+               static_cast<long long>(stale_us / 1000000));
       contacts.clear();
       update_views();
     }
@@ -172,7 +185,7 @@ void opensky_poll_task(void *arg) {
       }
     }
 
-    vTaskDelay(pdMS_TO_TICKS(kPollIntervalMs));
+    vTaskDelay(pdMS_TO_TICKS(g_poll_interval_ms));
   }
 }
 }  // namespace
@@ -199,6 +212,14 @@ extern "C" void app_main() {
     return;  // Stays in setup mode; the device reboots once the form is submitted.
   }
 
+  opensky.set_credentials(config.opensky_client_id, config.opensky_client_secret);
+  g_poll_interval_ms =
+      opensky.is_authenticated() ? kAuthenticatedPollIntervalMs : kUnauthenticatedPollIntervalMs;
+  if (!opensky.is_authenticated()) {
+    ESP_LOGI(kTag, "no OpenSky credentials configured, polling anonymously every %lu ms",
+            static_cast<unsigned long>(g_poll_interval_ms));
+  }
+
   if (lvgl_port_lock(0)) {
     lv_obj_t *radar_screen = lv_screen_active();
     settings_view.init(radar_screen);
@@ -210,7 +231,6 @@ extern "C" void app_main() {
     ESP_LOGE(kTag, "Failed to lock LVGL for UI setup");
   }
 
-  opensky.set_credentials(config.opensky_client_id, config.opensky_client_secret);
   aircraft_types.start();
 
   ESP_ERROR_CHECK(wifi_station::connect(config.wifi_ssid, config.wifi_password));

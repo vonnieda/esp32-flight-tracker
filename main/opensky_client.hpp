@@ -12,9 +12,18 @@
 // receiver position.
 class OpenSkyClient {
  public:
-  // Must be called once before fetch_contacts(), with the client_id/secret
-  // from a registered OpenSky account (https://opensky-network.org/).
+  // Optional: call once before fetch_contacts() with the client_id/secret
+  // from a registered OpenSky account (https://opensky-network.org/) to use
+  // OpenSky's authenticated tier. If never called (or called with an empty
+  // id/secret), fetch_contacts() falls back to OpenSky's unauthenticated
+  // tier, which has a much lower daily request quota -- see main.cpp's
+  // is_authenticated()-gated poll interval.
   void set_credentials(std::string client_id, std::string client_secret);
+
+  // Whether set_credentials() was given a non-empty client_id/secret, i.e.
+  // fetch_contacts() will use the authenticated tier rather than anonymous
+  // access.
+  bool is_authenticated() const;
 
   // Populates out_contacts with aircraft within a bounding box around
   // (home_lat_deg, home_lon_deg) sized to cover range_km. Returns ESP_OK on
@@ -24,7 +33,8 @@ class OpenSkyClient {
 
   // Whether a still-live OAuth2 token is currently held, i.e. the last
   // ensure_token() succeeded and it hasn't expired yet. Used by main.cpp to
-  // report connection_status after a failed fetch_contacts() call.
+  // report connection_status after a failed fetch_contacts() call. Always
+  // false when running unauthenticated.
   bool has_valid_token() const;
 
  private:

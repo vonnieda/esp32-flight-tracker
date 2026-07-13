@@ -23,7 +23,10 @@ struct Config {
 esp_err_t init();
 
 // Loads the saved config into out. Returns false (out left untouched) if
-// no complete config is stored yet, e.g. on first boot.
+// WiFi credentials aren't stored yet, e.g. on first boot. OpenSky creds and
+// home location are optional -- if unset they're left at their defaults
+// rather than causing failure, since those are set later from the in-app
+// settings screen rather than the captive portal.
 bool load(Config &out);
 
 esp_err_t save(const Config &config);
