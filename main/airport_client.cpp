@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "geo.hpp"
 #include "http_fetch.hpp"
+#include "json_util.hpp"
 
 namespace {
 constexpr char kTag[] = "airports";
@@ -33,20 +34,23 @@ esp_err_t airport_client::fetch_airports(float home_lat_deg, float home_lon_deg,
   const float lon_margin = range_km / (111.0f * std::cos(home_lat_deg * geo::kDegToRad));
 
   char url[256];
-  std::snprintf(url, sizeof(url), "%s?bbox=%.4f,%.4f,%.4f,%.4f&format=json&zoom=10", kUrlBase,
-                home_lat_deg - lat_margin, home_lon_deg - lon_margin, home_lat_deg + lat_margin,
-                home_lon_deg + lon_margin);
+  const int url_len =
+      std::snprintf(url, sizeof(url), "%s?bbox=%.4f,%.4f,%.4f,%.4f&format=json&zoom=10", kUrlBase,
+                    home_lat_deg - lat_margin, home_lon_deg - lon_margin, home_lat_deg + lat_margin,
+                    home_lon_deg + lon_margin);
+  ESP_RETURN_ON_FALSE(url_len >= 0 && static_cast<size_t>(url_len) < sizeof(url), ESP_ERR_INVALID_SIZE,
+                      kTag, "airports query URL truncated");
 
   ESP_LOGI(kTag, "requesting airports: %s", url);
   std::string response_body;
   ESP_RETURN_ON_ERROR(http_fetch(url, nullptr, nullptr, nullptr, response_body), kTag,
                       "airports request");
 
-  cJSON *root = cJSON_Parse(response_body.c_str());
+  const CJsonPtr root = cjson_parse(response_body.c_str());
   ESP_RETURN_ON_FALSE(root != nullptr, ESP_FAIL, kTag, "failed to parse airports response");
 
   const cJSON *airport = nullptr;
-  cJSON_ArrayForEach(airport, root) {
+  cJSON_ArrayForEach(airport, root.get()) {
     const cJSON *type = cJSON_GetObjectItemCaseSensitive(airport, "type");
     const cJSON *icao_id = cJSON_GetObjectItemCaseSensitive(airport, "icaoId");
     const cJSON *iata_id = cJSON_GetObjectItemCaseSensitive(airport, "iataId");
@@ -77,7 +81,6 @@ esp_err_t airport_client::fetch_airports(float home_lat_deg, float home_lon_deg,
     out_airports.push_back(std::move(entry));
   }
 
-  cJSON_Delete(root);
   ESP_LOGI(kTag, "parsed %zu airports", out_airports.size());
   return ESP_OK;
 }

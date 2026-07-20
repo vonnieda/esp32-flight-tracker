@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "geo.hpp"
 #include "http_fetch.hpp"
+#include "json_util.hpp"
 #include "nvs_flash.h"
 
 namespace {
@@ -164,7 +165,7 @@ void fetch_and_clip(const std::string &query, float lat0, float lon0, float dlat
     ESP_LOGW(kTag, "overpass fetch failed");
     return;
   }
-  cJSON *root = cJSON_Parse(body.c_str());
+  const CJsonPtr root = cjson_parse(body.c_str());
   body.clear();
   body.shrink_to_fit();
   if (root == nullptr) {
@@ -174,13 +175,12 @@ void fetch_and_clip(const std::string &query, float lat0, float lon0, float dlat
 
   std::vector<std::vector<LatLon>> raw;
   const cJSON *element = nullptr;
-  cJSON_ArrayForEach(element, cJSON_GetObjectItemCaseSensitive(root, "elements")) {
+  cJSON_ArrayForEach(element, cJSON_GetObjectItemCaseSensitive(root.get(), "elements")) {
     const cJSON *geometry = cJSON_GetObjectItemCaseSensitive(element, "geometry");
     if (cJSON_IsArray(geometry)) {
       raw.push_back(parse_geometry(geometry));
     }
   }
-  cJSON_Delete(root);
 
   for (const auto &pl : raw) clip_polyline(pl, lat0, lon0, dlat, dlon, out_clipped);
 }

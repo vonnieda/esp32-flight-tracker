@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "freertos/task.h"
 #include "http_fetch.hpp"
+#include "json_util.hpp"
 #include "nvs_flash.h"
 
 namespace {
@@ -182,9 +183,9 @@ void AircraftTypeClient::lookup_task() {
     PlaneClass plane_class = PlaneClass::kUnknown;
     bool resolved = true;
     if (status == 200) {
-      cJSON *root = cJSON_Parse(body.c_str());
+      const CJsonPtr root = cjson_parse(body.c_str());
       if (root != nullptr) {
-        const cJSON *response = cJSON_GetObjectItemCaseSensitive(root, "response");
+        const cJSON *response = cJSON_GetObjectItemCaseSensitive(root.get(), "response");
         const cJSON *aircraft = cJSON_GetObjectItemCaseSensitive(response, "aircraft");
         const cJSON *icao_type = cJSON_GetObjectItemCaseSensitive(aircraft, "icao_type");
         if (cJSON_IsString(icao_type)) {
@@ -192,7 +193,6 @@ void AircraftTypeClient::lookup_task() {
           ESP_LOGI(kTag, "%s: %s -> class %d", icao24.c_str(), icao_type->valuestring,
                    static_cast<int>(plane_class));
         }
-        cJSON_Delete(root);
       }
     } else if (status != 404) {
       // 404 means adsbdb doesn't know the airframe (common for military and

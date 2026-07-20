@@ -9,6 +9,7 @@
 #include "esp_timer.h"
 #include "geo.hpp"
 #include "http_fetch.hpp"
+#include "json_util.hpp"
 
 namespace {
 constexpr char kTag[] = "opensky";
@@ -25,6 +26,22 @@ constexpr int64_t kExpiryMarginUs = 30LL * 1000 * 1000;
 // reckoning and snap back every poll. Drop any state whose position or
 // overall report is older than this relative to the response timestamp.
 constexpr double kMaxStateAgeS = 60.0;
+
+// Index of each field within one entry of OpenSky's "states" array; see
+// https://openskynetwork.github.io/opensky-api/rest.html#response. Indices
+// not read here (sensor metadata, squawk, spi, etc.) are omitted.
+enum StateField {
+  kIcao24 = 0,
+  kCallsign = 1,
+  kTimePosition = 3,
+  kLastContact = 4,
+  kLongitude = 5,
+  kLatitude = 6,
+  kBaroAltitude = 7,
+  kOnGround = 8,
+  kVelocity = 9,
+  kTrueTrack = 10,
+};
 
 // Trims the trailing spaces OpenSky pads callsigns with.
 std::string trim_trailing_spaces(const std::string &s) {
@@ -51,13 +68,12 @@ esp_err_t OpenSkyClient::fetch_token() {
                                  post_body.c_str(), response_body),
                       kTag, "token request");
 
-  cJSON *root = cJSON_Parse(response_body.c_str());
+  const CJsonPtr root = cjson_parse(response_body.c_str());
   ESP_RETURN_ON_FALSE(root != nullptr, ESP_FAIL, kTag, "failed to parse token response");
 
-  const cJSON *access_token = cJSON_GetObjectItemCaseSensitive(root, "access_token");
-  const cJSON *expires_in = cJSON_GetObjectItemCaseSensitive(root, "expires_in");
+  const cJSON *access_token = cJSON_GetObjectItemCaseSensitive(root.get(), "access_token");
+  const cJSON *expires_in = cJSON_GetObjectItemCaseSensitive(root.get(), "expires_in");
   if (!cJSON_IsString(access_token) || !cJSON_IsNumber(expires_in)) {
-    cJSON_Delete(root);
     ESP_LOGE(kTag, "token response missing fields");
     return ESP_FAIL;
   }
@@ -70,7 +86,6 @@ esp_err_t OpenSkyClient::fetch_token() {
   ESP_LOGI(kTag, "got token (%zu bytes), expires in %.0fs", access_token_.size(),
           expires_in->valuedouble);
 
-  cJSON_Delete(root);
   return ESP_OK;
 }
 
@@ -95,9 +110,12 @@ esp_err_t OpenSkyClient::fetch_contacts(float home_lat_deg, float home_lon_deg, 
   const float lon_margin = range_km / (111.0f * std::cos(home_lat_deg * geo::kDegToRad));
 
   char url[256];
-  std::snprintf(url, sizeof(url), "%s?lamin=%.4f&lomin=%.4f&lamax=%.4f&lomax=%.4f", kStatesUrlBase,
-               home_lat_deg - lat_margin, home_lon_deg - lon_margin, home_lat_deg + lat_margin,
-               home_lon_deg + lon_margin);
+  const int url_len =
+      std::snprintf(url, sizeof(url), "%s?lamin=%.4f&lomin=%.4f&lamax=%.4f&lomax=%.4f",
+                    kStatesUrlBase, home_lat_deg - lat_margin, home_lon_deg - lon_margin,
+                    home_lat_deg + lat_margin, home_lon_deg + lon_margin);
+  ESP_RETURN_ON_FALSE(url_len >= 0 && static_cast<size_t>(url_len) < sizeof(url), ESP_ERR_INVALID_SIZE,
+                      kTag, "states query URL truncated");
 
   const std::string auth_header = "Bearer " + access_token_;
 
@@ -108,18 +126,17 @@ esp_err_t OpenSkyClient::fetch_contacts(float home_lat_deg, float home_lon_deg, 
                       kTag, "states request");
   ESP_LOGI(kTag, "states response: %zu bytes", response_body.size());
 
-  cJSON *root = cJSON_Parse(response_body.c_str());
+  const CJsonPtr root = cjson_parse(response_body.c_str());
   ESP_RETURN_ON_FALSE(root != nullptr, ESP_FAIL, kTag, "failed to parse states response");
 
-  const cJSON *response_time_item = cJSON_GetObjectItemCaseSensitive(root, "time");
+  const cJSON *response_time_item = cJSON_GetObjectItemCaseSensitive(root.get(), "time");
   const double response_time =
       cJSON_IsNumber(response_time_item) ? response_time_item->valuedouble : 0.0;
 
-  const cJSON *states = cJSON_GetObjectItemCaseSensitive(root, "states");
+  const cJSON *states = cJSON_GetObjectItemCaseSensitive(root.get(), "states");
   if (!cJSON_IsArray(states)) {
     // No traffic in range; OpenSky returns states: null in this case.
     ESP_LOGI(kTag, "no traffic in range");
-    cJSON_Delete(root);
     return ESP_OK;
   }
 
@@ -128,16 +145,16 @@ esp_err_t OpenSkyClient::fetch_contacts(float home_lat_deg, float home_lon_deg, 
     if (!cJSON_IsArray(state)) {
       continue;
     }
-    const cJSON *icao24_item = cJSON_GetArrayItem(state, 0);
-    const cJSON *callsign_item = cJSON_GetArrayItem(state, 1);
-    const cJSON *time_position_item = cJSON_GetArrayItem(state, 3);
-    const cJSON *last_contact_item = cJSON_GetArrayItem(state, 4);
-    const cJSON *longitude_item = cJSON_GetArrayItem(state, 5);
-    const cJSON *latitude_item = cJSON_GetArrayItem(state, 6);
-    const cJSON *baro_altitude_item = cJSON_GetArrayItem(state, 7);
-    const cJSON *on_ground_item = cJSON_GetArrayItem(state, 8);
-    const cJSON *velocity_item = cJSON_GetArrayItem(state, 9);
-    const cJSON *true_track_item = cJSON_GetArrayItem(state, 10);
+    const cJSON *icao24_item = cJSON_GetArrayItem(state, kIcao24);
+    const cJSON *callsign_item = cJSON_GetArrayItem(state, kCallsign);
+    const cJSON *time_position_item = cJSON_GetArrayItem(state, kTimePosition);
+    const cJSON *last_contact_item = cJSON_GetArrayItem(state, kLastContact);
+    const cJSON *longitude_item = cJSON_GetArrayItem(state, kLongitude);
+    const cJSON *latitude_item = cJSON_GetArrayItem(state, kLatitude);
+    const cJSON *baro_altitude_item = cJSON_GetArrayItem(state, kBaroAltitude);
+    const cJSON *on_ground_item = cJSON_GetArrayItem(state, kOnGround);
+    const cJSON *velocity_item = cJSON_GetArrayItem(state, kVelocity);
+    const cJSON *true_track_item = cJSON_GetArrayItem(state, kTrueTrack);
 
     if (!cJSON_IsNumber(longitude_item) || !cJSON_IsNumber(latitude_item)) {
       continue;  // Position unknown; nothing to plot.
@@ -177,6 +194,5 @@ esp_err_t OpenSkyClient::fetch_contacts(float home_lat_deg, float home_lon_deg, 
 
   ESP_LOGI(kTag, "parsed %zu contacts", out_contacts.size());
 
-  cJSON_Delete(root);
   return ESP_OK;
 }

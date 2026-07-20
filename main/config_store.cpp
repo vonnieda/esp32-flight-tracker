@@ -9,6 +9,26 @@ namespace {
 constexpr char kTag[] = "config_store";
 constexpr char kNamespace[] = "ftcfg";
 
+// RAII wrapper so nvs_close() always runs on scope exit, letting load()/
+// save()/clear() bail out early via ESP_RETURN_ON_ERROR without having to
+// thread "did an earlier step already fail" state through to a manual close.
+class NvsHandle {
+ public:
+  NvsHandle(const char *name, nvs_open_mode_t mode) { open_result_ = nvs_open(name, mode, &handle_); }
+  ~NvsHandle() {
+    if (open_result_ == ESP_OK) nvs_close(handle_);
+  }
+  NvsHandle(const NvsHandle &) = delete;
+  NvsHandle &operator=(const NvsHandle &) = delete;
+
+  esp_err_t open_result() const { return open_result_; }
+  nvs_handle_t get() const { return handle_; }
+
+ private:
+  nvs_handle_t handle_ = 0;
+  esp_err_t open_result_ = ESP_FAIL;
+};
+
 esp_err_t get_string(nvs_handle_t handle, const char *key, std::string &out) {
   size_t len = 0;
   esp_err_t err = nvs_get_str(handle, key, nullptr, &len);
@@ -39,19 +59,19 @@ esp_err_t config_store::init() {
 }
 
 bool config_store::load(Config &out) {
-  nvs_handle_t handle;
-  if (nvs_open(kNamespace, NVS_READONLY, &handle) != ESP_OK) {
+  NvsHandle handle(kNamespace, NVS_READONLY);
+  if (handle.open_result() != ESP_OK) {
     return false;  // Namespace doesn't exist yet: never configured.
   }
 
   Config loaded;
-  const bool ok = get_string(handle, "ssid", loaded.wifi_ssid) == ESP_OK &&
-                  get_string(handle, "pass", loaded.wifi_password) == ESP_OK &&
-                  get_string(handle, "os_id", loaded.opensky_client_id) == ESP_OK &&
-                  get_string(handle, "os_secret", loaded.opensky_client_secret) == ESP_OK &&
-                  get_float(handle, "lat", loaded.home_latitude_deg) == ESP_OK &&
-                  get_float(handle, "lon", loaded.home_longitude_deg) == ESP_OK;
-  nvs_close(handle);
+  const bool ok = 
+    get_string(handle.get(), "ssid", loaded.wifi_ssid) == ESP_OK &&
+    get_string(handle.get(), "pass", loaded.wifi_password) == ESP_OK &&
+    get_string(handle.get(), "os_id", loaded.opensky_client_id)  == ESP_OK &&
+    get_string(handle.get(), "os_secret", loaded.opensky_client_secret) == ESP_OK &&
+    get_float(handle.get(), "lat", loaded.home_latitude_deg) == ESP_OK &&
+    get_float(handle.get(), "lon", loaded.home_longitude_deg) == ESP_OK;
 
   if (!ok) {
     ESP_LOGW(kTag, "stored config incomplete, treating as unconfigured");
@@ -63,32 +83,25 @@ bool config_store::load(Config &out) {
 }
 
 esp_err_t config_store::save(const Config &config) {
-  nvs_handle_t handle;
-  ESP_RETURN_ON_ERROR(nvs_open(kNamespace, NVS_READWRITE, &handle), kTag, "open");
+  NvsHandle handle(kNamespace, NVS_READWRITE);
+  ESP_RETURN_ON_ERROR(handle.open_result(), kTag, "open");
 
-  esp_err_t err = ESP_OK;
-  err = err == ESP_OK ? nvs_set_str(handle, "ssid", config.wifi_ssid.c_str()) : err;
-  err = err == ESP_OK ? nvs_set_str(handle, "pass", config.wifi_password.c_str()) : err;
-  err = err == ESP_OK ? nvs_set_str(handle, "os_id", config.opensky_client_id.c_str()) : err;
-  err = err == ESP_OK ? nvs_set_str(handle, "os_secret", config.opensky_client_secret.c_str())
-                     : err;
-  err = err == ESP_OK
-          ? nvs_set_blob(handle, "lat", &config.home_latitude_deg, sizeof(float))
-          : err;
-  err = err == ESP_OK
-          ? nvs_set_blob(handle, "lon", &config.home_longitude_deg, sizeof(float))
-          : err;
-  err = err == ESP_OK ? nvs_commit(handle) : err;
-
-  nvs_close(handle);
-  return err;
+  ESP_RETURN_ON_ERROR(nvs_set_str(handle.get(), "ssid", config.wifi_ssid.c_str()), kTag, "ssid");
+  ESP_RETURN_ON_ERROR(nvs_set_str(handle.get(), "pass", config.wifi_password.c_str()), kTag, "pass");
+  ESP_RETURN_ON_ERROR(nvs_set_str(handle.get(), "os_id", config.opensky_client_id.c_str()), kTag,
+                      "os_id");
+  ESP_RETURN_ON_ERROR(nvs_set_str(handle.get(), "os_secret", config.opensky_client_secret.c_str()),
+                      kTag, "os_secret");
+  ESP_RETURN_ON_ERROR(nvs_set_blob(handle.get(), "lat", &config.home_latitude_deg, sizeof(float)),
+                      kTag, "lat");
+  ESP_RETURN_ON_ERROR(nvs_set_blob(handle.get(), "lon", &config.home_longitude_deg, sizeof(float)),
+                      kTag, "lon");
+  return nvs_commit(handle.get());
 }
 
 esp_err_t config_store::clear() {
-  nvs_handle_t handle;
-  ESP_RETURN_ON_ERROR(nvs_open(kNamespace, NVS_READWRITE, &handle), kTag, "open");
-  esp_err_t err = nvs_erase_all(handle);
-  err = err == ESP_OK ? nvs_commit(handle) : err;
-  nvs_close(handle);
-  return err;
+  NvsHandle handle(kNamespace, NVS_READWRITE);
+  ESP_RETURN_ON_ERROR(handle.open_result(), kTag, "open");
+  ESP_RETURN_ON_ERROR(nvs_erase_all(handle.get()), kTag, "erase");
+  return nvs_commit(handle.get());
 }
